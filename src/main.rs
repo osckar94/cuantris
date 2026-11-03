@@ -459,7 +459,12 @@ impl App {
             // macroquad entrega los toques en pixeles fisicos, pero la pantalla
             // se dibuja en pixeles logicos (high_dpi). Sin esta division el
             // dedo cae 2-3 veces mas lejos en moviles y los botones no responden.
-            let dpi = macroquad::miniquad::window::dpi_scale().max(1.0);
+            let (pw, _) = macroquad::miniquad::window::screen_size();
+            let sw = screen_width();
+            let mut dpi = if sw > 0.0 { pw / sw } else { 1.0 };
+            if !dpi.is_finite() || dpi < 1.0 {
+                dpi = 1.0;
+            }
             for t in ts {
                 let p = t.position / dpi;
                 match t.phase {
