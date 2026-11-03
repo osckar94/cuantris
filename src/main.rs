@@ -21,9 +21,9 @@ fn window_conf() -> Conf {
         window_title: "Cuantris".to_owned(),
         window_width: 540,
         window_height: 960,
-        // En la web, high_dpi hace que los toques lleguen en pixeles fisicos
-        // (x2/x3) y no coincidan con los botones. Sin el, todo usa la misma escala.
-        high_dpi: !cfg!(target_arch = "wasm32"),
+        // Con high_dpi los toques llegan en pixeles fisicos (x2/x3) y no
+        // coinciden con los botones dibujados. Sin el, todo usa la misma escala.
+        high_dpi: false,
         // En Android el MSAA (sample_count > 1) hace fallar la creacion del
         // contexto grafico en muchos telefonos y la app se cierra al abrir.
         sample_count: if cfg!(target_os = "android") { 1 } else { 4 },
@@ -388,7 +388,7 @@ struct App {
     arr_t: f32,
     sfx: Sfx,
     menu_pieces: Vec<MenuPiece>,
-    dbg: String,
+    active: Vec<u64>,
 }
 
 impl App {
@@ -419,7 +419,7 @@ impl App {
             gestures: HashMap::new(),
             touch_mode: false,
             block_input: false,
-            dbg: String::new(),
+            active: Vec::new(),
             das_dir: 0,
             das_t: 0.0,
             arr_t: 0.0,
@@ -451,48 +451,48 @@ impl App {
         let ts = touches();
         if !ts.is_empty() {
             self.touch_mode = true;
-            let t = &ts[0];
-            let (pw, ph) = macroquad::miniquad::window::screen_size();
-            self.dbg = format!(
-                "t={:.0},{:.0} {} n={} sw={:.0}x{:.0} ss={:.0}x{:.0} dpi={:.2} blk={} m={:.0},{:.0}",
-                t.position.x, t.position.y,
-                match t.phase {
-                    TouchPhase::Started => "S",
-                    TouchPhase::Moved => "M",
-                    TouchPhase::Stationary => "St",
-                    TouchPhase::Ended => "E",
-                    TouchPhase::Cancelled => "C",
-                },
-                ts.len(), screen_width(), screen_height(),
-                pw, ph, macroquad::miniquad::window::dpi_scale(), self.block_input,
-                mouse_position().0, mouse_position().1
-            );
         }
         if self.block_input {
             let held = !ts.is_empty() || is_mouse_button_down(MouseButton::Left);
             if !held {
                 self.block_input = false;
             }
+            self.active.clear();
             return v;
         }
         if self.touch_mode {
-            // macroquad entrega los toques en pixeles fisicos, pero la pantalla
-            // se dibuja en pixeles logicos (high_dpi). Sin esta division el
-            // dedo cae 2-3 veces mas lejos en moviles y los botones no responden.
-            let (pw, _) = macroquad::miniquad::window::screen_size();
-            let sw = screen_width();
-            let mut dpi = if sw > 0.0 { pw / sw } else { 1.0 };
-            if !dpi.is_finite() || dpi < 1.0 {
-                dpi = 1.0;
-            }
-            for t in ts {
-                let p = t.position / dpi;
+            // En algunos navegadores/telefonos macroquad no llega a mostrar la
+            // fase "Started" de un toque (solo Stationary/Moved/Ended). Por eso
+            // cualquier dedo que no conociamos cuenta como un toque nuevo.
+            for t in ts.iter() {
+                let p = t.position;
+                let known = self.active.contains(&t.id);
                 match t.phase {
-                    TouchPhase::Started => v.push(Ptr::Down(t.id, p)),
-                    TouchPhase::Moved | TouchPhase::Stationary => v.push(Ptr::Move(t.id, p)),
-                    TouchPhase::Ended | TouchPhase::Cancelled => v.push(Ptr::Up(t.id, p)),
+                    TouchPhase::Started => {
+                        if !known {
+                            self.active.push(t.id);
+                            v.push(Ptr::Down(t.id, p));
+                        }
+                    }
+                    TouchPhase::Moved | TouchPhase::Stationary => {
+                        if !known {
+                            self.active.push(t.id);
+                            v.push(Ptr::Down(t.id, p));
+                        } else {
+                            v.push(Ptr::Move(t.id, p));
+                        }
+                    }
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        if !known {
+                            v.push(Ptr::Down(t.id, p));
+                        }
+                        self.active.retain(|&id| id != t.id);
+                        v.push(Ptr::Up(t.id, p));
+                    }
                 }
             }
+            // Olvidar dedos que desaparecieron sin evento de fin.
+            self.active.retain(|id| ts.iter().any(|t| t.id == *id));
         } else {
             let m = mouse_position();
             let p = vec2(m.0, m.1);
@@ -961,11 +961,7 @@ impl App {
             }
         }
         self.draw_fx();
-        draw_sound_icon(l.sound, self.sfx.on);
-        if !self.dbg.is_empty() {
-            draw_text(&self.dbg, 4.0, screen_height() - 6.0, 14.0, YELLOW);
-        }
-    }
+        draw_sound_icon(l.sound, self.sfx.on);    }
 
     fn draw_menu(&self) {
         let (w, h) = (screen_width(), screen_height());
