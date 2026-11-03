@@ -22,8 +22,10 @@ fn window_conf() -> Conf {
         window_width: 540,
         window_height: 960,
         high_dpi: true,
-        sample_count: 4,
-        window_resizable: true,
+        // En Android el MSAA (sample_count > 1) hace fallar la creacion del
+        // contexto grafico en muchos telefonos y la app se cierra al abrir.
+        sample_count: if cfg!(target_os = "android") { 1 } else { 4 },
+        window_resizable: !cfg!(target_os = "android"),
         ..Default::default()
     }
 }

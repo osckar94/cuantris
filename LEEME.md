@@ -17,14 +17,21 @@
 2. Arriba a la derecha: **+ → New repository**. Nombre: `cuantris`. Marca **Public** (necesario para que el
    enlace se descargue sin iniciar sesión). Pulsa **Create repository**.
 3. En la página nueva pulsa **uploading an existing file**.
-4. Desde esta carpeta arrastra: `Cargo.toml`, `.gitignore`, `LEEME.md`, la carpeta `src` y la carpeta `.github`.
-   (No hace falta subir `CONTRATO.md`.) Pulsa **Commit changes**.
-5. Ve a la pestaña **Actions**: verás "Compilar APK Android" en marcha (unos 5–10 minutos).
-6. Cuando termine en verde, tu enlace fijo será:
+4. Desde esta carpeta arrastra: `Cargo.toml`, `.gitignore`, `LEEME.md`, `web_index.html`, la carpeta `src`
+   y la carpeta `.github`. (No hace falta subir `CONTRATO.md`.) Pulsa **Commit changes**.
+5. Una sola vez: **Settings → Pages → Source: GitHub Actions**.
+6. Ve a la pestaña **Actions**: verás "Compilar APK Android y version Web" en marcha (unos 5–10 minutos).
+   Si falló antes de activar Pages, pulsa **Re-run all jobs**.
+7. Cuando termine en verde tienes dos enlaces (cambia `TU_USUARIO` por tu usuario de GitHub):
 
+   **Recomendado: jugar sin instalar nada (Android y iPhone):**
+   `https://TU_USUARIO.github.io/cuantris/`
+
+   **Descargar APK (solo Android):**
    `https://github.com/TU_USUARIO/cuantris/releases/latest/download/cuantris.apk`
 
-   (cambia `TU_USUARIO` por tu usuario de GitHub). Ese enlace lo pegas en WhatsApp.
+   Pega el enlace en WhatsApp. El de la versión web abre el juego directamente en el navegador.
+   Para tenerlo como app: menú del navegador → **Agregar a la pantalla principal**.
 
 ## Instalar en el celular (Android)
 1. Toca el enlace en WhatsApp → se descarga `cuantris.apk`.

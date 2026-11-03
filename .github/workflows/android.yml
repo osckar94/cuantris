@@ -1,4 +1,4 @@
-name: Compilar APK Android
+name: Compilar APK Android y version Web
 
 on:
   push:
@@ -7,8 +7,49 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
+  # ---------- Version WEB: un enlace que abre el juego en el navegador ----------
+  web:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Rust para web
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Compilar version web
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Preparar pagina
+        run: |
+          mkdir -p web
+          cp target/wasm32-unknown-unknown/release/cuantris.wasm web/
+          cp web_index.html web/index.html
+          BUNDLE=$(find ~/.cargo/registry/src -path "*macroquad-0.4*/js/mq_js_bundle.js" | head -n 1)
+          if [ -n "$BUNDLE" ]; then cp "$BUNDLE" web/; else curl -fL -o web/mq_js_bundle.js https://raw.githubusercontent.com/not-fl3/macroquad/master/js/mq_js_bundle.js; fi
+          ls -la web
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  # ---------- Version APK para instalar en Android ----------
   apk:
     runs-on: ubuntu-latest
     steps:
