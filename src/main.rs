@@ -21,7 +21,9 @@ fn window_conf() -> Conf {
         window_title: "Cuantris".to_owned(),
         window_width: 540,
         window_height: 960,
-        high_dpi: true,
+        // En la web, high_dpi hace que los toques lleguen en pixeles fisicos
+        // (x2/x3) y no coincidan con los botones. Sin el, todo usa la misma escala.
+        high_dpi: !cfg!(target_arch = "wasm32"),
         // En Android el MSAA (sample_count > 1) hace fallar la creacion del
         // contexto grafico en muchos telefonos y la app se cierra al abrir.
         sample_count: if cfg!(target_os = "android") { 1 } else { 4 },
