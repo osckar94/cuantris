@@ -1,0 +1,33 @@
+[package]
+name = "cuantris"
+version = "1.0.0"
+edition = "2021"
+description = "Cuantris - bloques cuanticos para movil"
+
+[dependencies]
+macroquad = "0.4"
+
+# El APK se compila en modo "debug" (firmado automaticamente con clave de
+# depuracion para poder instalarlo), pero con optimizaciones completas.
+[profile.dev]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+incremental = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[package.metadata.android]
+package_name = "com.cuantris.juego"
+label = "Cuantris"
+fullscreen = true
+min_sdk_version = 21
+target_sdk_version = 30
+build_targets = ["armv7-linux-androideabi", "aarch64-linux-android"]
+
+[package.metadata.android.activity_attributes]
+"android:screenOrientation" = "userPortrait"
