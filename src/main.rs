@@ -388,6 +388,7 @@ struct App {
     arr_t: f32,
     sfx: Sfx,
     menu_pieces: Vec<MenuPiece>,
+    dbg: String,
 }
 
 impl App {
@@ -418,6 +419,7 @@ impl App {
             gestures: HashMap::new(),
             touch_mode: false,
             block_input: false,
+            dbg: String::new(),
             das_dir: 0,
             das_t: 0.0,
             arr_t: 0.0,
@@ -449,6 +451,22 @@ impl App {
         let ts = touches();
         if !ts.is_empty() {
             self.touch_mode = true;
+            let t = &ts[0];
+            let (pw, ph) = macroquad::miniquad::window::screen_size();
+            self.dbg = format!(
+                "t={:.0},{:.0} {} n={} sw={:.0}x{:.0} ss={:.0}x{:.0} dpi={:.2} blk={} m={:.0},{:.0}",
+                t.position.x, t.position.y,
+                match t.phase {
+                    TouchPhase::Started => "S",
+                    TouchPhase::Moved => "M",
+                    TouchPhase::Stationary => "St",
+                    TouchPhase::Ended => "E",
+                    TouchPhase::Cancelled => "C",
+                },
+                ts.len(), screen_width(), screen_height(),
+                pw, ph, macroquad::miniquad::window::dpi_scale(), self.block_input,
+                mouse_position().0, mouse_position().1
+            );
         }
         if self.block_input {
             let held = !ts.is_empty() || is_mouse_button_down(MouseButton::Left);
@@ -944,6 +962,9 @@ impl App {
         }
         self.draw_fx();
         draw_sound_icon(l.sound, self.sfx.on);
+        if !self.dbg.is_empty() {
+            draw_text(&self.dbg, 4.0, screen_height() - 6.0, 14.0, YELLOW);
+        }
     }
 
     fn draw_menu(&self) {
