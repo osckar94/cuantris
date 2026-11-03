@@ -33,7 +33,8 @@ jobs:
         run: |
           mkdir -p web
           cp target/wasm32-unknown-unknown/release/cuantris.wasm web/
-          cp web_index.html web/index.html
+          # ?v=numero de compilacion: obliga al navegador a bajar siempre la version nueva
+          sed "s/cuantris.wasm/cuantris.wasm?v=${{ github.run_number }}/; s/mq_js_bundle.js/mq_js_bundle.js?v=${{ github.run_number }}/" web_index.html > web/index.html
           BUNDLE=$(find ~/.cargo/registry/src -path "*macroquad-0.4*/js/mq_js_bundle.js" | head -n 1)
           if [ -n "$BUNDLE" ]; then cp "$BUNDLE" web/; else curl -fL -o web/mq_js_bundle.js https://raw.githubusercontent.com/not-fl3/macroquad/master/js/mq_js_bundle.js; fi
           ls -la web
