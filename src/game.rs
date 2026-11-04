@@ -222,6 +222,12 @@ impl Game {
             let s = g.gen_spec(i < 2);
             g.queue.push_back(s);
         }
+        // La tercera pieza siempre es TUNEL, para descubrir la mecanica pronto.
+        if let Some(s) = g.queue.get_mut(2) {
+            s.superpos = false;
+            s.entangled = false;
+            s.tunnel = true;
+        }
         g.spawn_next();
         g
     }

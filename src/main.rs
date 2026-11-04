@@ -125,10 +125,11 @@ fn lay() -> Lay {
     let top = (h * 0.075).max(40.0);
     let bot = (h * 0.1).max(56.0);
     let avail_h = h - top - bot - h * 0.02;
-    let cell = ((w * 0.95) / 14.6).min(avail_h / 20.0).floor().max(4.0);
+    let cell = ((w * 0.95) / 15.1).min(avail_h / 20.0).floor().max(4.0);
     let bw = cell * 10.0;
     let sw = cell * 4.2;
-    let gap = cell * 0.4;
+    // Espacio para el marco 3D del tablero sin tapar el panel lateral.
+    let gap = cell * 0.9;
     let total = bw + gap + sw;
     let bx = ((w - total) / 2.0).floor();
     let by = top + ((avail_h - cell * 20.0) / 2.0).max(0.0);
@@ -1200,7 +1201,7 @@ impl App {
 
         let pulse = (t * 1.5).sin() * 0.5 + 0.5;
         // Marco en relieve alrededor del pozo
-        let fr = (s * 0.38).max(4.0);
+        let fr = (s * 0.3).max(4.0);
         let (ox0, oy0, ox1, oy1) = (bx - fr, by - fr, bx + bw + fr, by + bh + fr);
         draw_rectangle(ox0 + fr * 0.6, oy0 + fr * 0.9, ox1 - ox0, oy1 - oy0, Color::new(0.0, 0.0, 0.0, 0.45));
         let frame = Color::new(0.12, 0.2, 0.38, 1.0);
