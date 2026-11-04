@@ -87,10 +87,65 @@ impl Tech {
     }
 }
 
+/// Como cambia el entrenamiento segun el nivel elegido.
+pub struct Level {
+    /// Piezas extra (o menos) para cada reto
+    pub extra: i32,
+    /// Rango de piezas entre retos
+    pub every: (u32, u32),
+    /// 0 = pista siempre, 1 = pista a mitad del reto, 2 = nunca
+    pub hint: u8,
+    pub label: &'static str,
+}
+
+pub fn level(mode: crate::game::Mode) -> Level {
+    use crate::game::Mode;
+    match mode {
+        Mode::Facil => Level { extra: 2, every: (5, 7), hint: 0, label: "Retos frecuentes, con pista y piezas de sobra" },
+        Mode::Normal => Level { extra: 0, every: (6, 9), hint: 1, label: "La pista aparece a mitad del reto" },
+        Mode::Experto => Level { extra: -1, every: (4, 7), hint: 2, label: "Retos seguidos, pocas piezas y SIN pistas" },
+    }
+}
+
+impl Tech {
+    /// Pista concreta: que herramienta usar (sin dar la jugada exacta).
+    pub fn hint(self) -> &'static str {
+        match self {
+            Tech::Orden => "Pista: pulsa GUARDAR y juega la siguiente primero",
+            Tech::Supuesto => "Pista: deja un hueco tapado y suelta encima la pieza con flecha",
+            Tech::Invertir => "Pista: pon las piezas con punto en lineas que puedas completar",
+            Tech::Mirar => "Pista: pulsa OBSERVAR antes de soltar la pieza doble",
+            Tech::Inesperado => "Pista: gira 2 veces una T, J o L y encajala",
+        }
+    }
+    /// Que boton conviene iluminar como pista (indice en la fila de acciones o botonera).
+    pub fn key_button(self) -> Option<KeyBtn> {
+        match self {
+            Tech::Orden => Some(KeyBtn::Hold),
+            Tech::Mirar => Some(KeyBtn::Observe),
+            Tech::Inesperado => Some(KeyBtn::Rotate),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum KeyBtn {
+    Hold,
+    Observe,
+    Rotate,
+}
+
+/// Segundos que dura el anuncio grande de un reto (el juego espera).
+pub const ANNOUNCE: f32 = 6.0;
+
 pub struct Challenge {
     pub tech: Tech,
     pub left: u32,
+    pub total: u32,
     pub t: f32,
+    /// Mostrando el anuncio grande (el juego espera)
+    pub announcing: bool,
 }
 
 #[derive(Clone, Copy, Default)]

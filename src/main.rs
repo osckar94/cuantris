@@ -569,6 +569,10 @@ struct App {
     last_result: Option<(Tech, bool, f32)>,
     /// Botones de la botonera mantenidos: (puntero, boton, tiempo)
     pad_held: Vec<(u64, usize, f32)>,
+    /// Tarjeta de explicacion del entrenamiento lateral al empezar
+    intro: bool,
+    intro_seen: [bool; 3],
+    intro_t: f32,
 }
 
 impl App {
@@ -616,6 +620,9 @@ impl App {
             ent_flag: false,
             last_result: None,
             pad_held: Vec::new(),
+            intro: false,
+            intro_seen: [false; 3],
+            intro_t: 0.0,
         }
     }
 
@@ -640,14 +647,37 @@ impl App {
         if tech == Tech::Mirar && self.game.charges == 0 {
             self.game.add_charge();
         }
+        let lv = lateral::level(self.mode);
+        let n = (tech.pieces() as i32 + lv.extra).max(2) as u32;
         self.challenge = Some(Challenge {
             tech,
-            left: tech.pieces(),
+            left: n,
+            total: n,
             t: 0.0,
+            announcing: true,
         });
         self.last_result = None;
-        self.popup(l, "RETO LATERAL!", GOLD, true);
+        self.popups.clear();
+        self.block_input = true;
+        let _ = l;
         self.sfx.play(S::Entangle, 0.6);
+    }
+
+    fn next_interval(&self) -> u32 {
+        let (a, b) = lateral::level(self.mode).every;
+        a + game::rand_int((b - a + 1) as i32) as u32
+    }
+
+    /// La pista del reto se muestra segun el nivel (FACIL siempre, NORMAL a mitad).
+    fn hint_visible(&self) -> bool {
+        match &self.challenge {
+            Some(c) => match lateral::level(self.mode).hint {
+                0 => true,
+                1 => c.left * 2 <= c.total,
+                _ => false,
+            },
+            None => false,
+        }
     }
 
     /// Revisa el reto activo tras colocar una pieza.
@@ -693,14 +723,14 @@ impl App {
             }
             self.challenge = None;
             self.last_result = Some((tech, true, 0.0));
-            self.next_ch = 7 + game::rand_int(4) as u32;
+            self.next_ch = self.next_interval();
         } else if left == 0 {
             self.game_stats.add(tech, false);
             self.session_stats.add(tech, false);
             self.popup(l, "RETO NO SUPERADO", MAGENTA, false);
             self.challenge = None;
             self.last_result = Some((tech, false, 0.0));
-            self.next_ch = 6 + game::rand_int(3) as u32;
+            self.next_ch = self.next_interval();
         }
     }
 
@@ -797,7 +827,11 @@ impl App {
     fn start(&mut self, mode: Mode) {
         self.puzzle = None;
         self.challenge = None;
-        self.next_ch = 5;
+        let mi = MODES.iter().position(|m| *m == mode).unwrap_or(0);
+        self.intro = !self.intro_seen[mi];
+        self.intro_seen[mi] = true;
+        self.intro_t = 0.0;
+        self.next_ch = lateral::level(mode).every.0;
         self.game_stats = Stats::default();
         self.last_result = None;
         self.ent_flag = false;
@@ -950,6 +984,31 @@ impl App {
     }
 
     fn update_play(&mut self, dt: f32, ptrs: &[Ptr], l: &Lay) {
+        // Tarjeta de explicacion o anuncio de reto: el juego espera un toque.
+        let tap = ptrs.iter().any(|p| matches!(p, Ptr::Down(..)))
+            || is_key_pressed(KeyCode::Space)
+            || is_key_pressed(KeyCode::Enter);
+        if self.intro {
+            self.intro_t += dt;
+            if tap && self.intro_t > 0.4 {
+                self.intro = false;
+                self.block_input = true;
+                self.sfx.play(S::Click, 0.5);
+            }
+            return;
+        }
+        if let Some(c) = self.challenge.as_mut() {
+            if c.announcing {
+                c.t += dt;
+                if (tap && c.t > 0.4) || c.t > lateral::ANNOUNCE {
+                    c.announcing = false;
+                    c.t = 0.0;
+                    self.block_input = true;
+                    self.sfx.play(S::Click, 0.5);
+                }
+                return;
+            }
+        }
         let cell = l.cell;
         let now = get_time();
         for p in ptrs {
@@ -1555,6 +1614,14 @@ impl App {
                     self.draw_pzwin();
                 } else if self.state == State::PzFail {
                     self.draw_pzfail();
+                } else if self.state == State::Playing && self.puzzle.is_none() {
+                    if self.intro {
+                        self.draw_intro();
+                    } else if let Some(c) = &self.challenge {
+                        if c.announcing {
+                            self.draw_announce();
+                        }
+                    }
                 }
             }
         }
@@ -1597,10 +1664,10 @@ impl App {
 
         let rs = menu_rects();
         let info = [
-            ("FACIL", "Nivel 1  -  4 observaciones", GREEN),
-            ("NORMAL", "Nivel 4  -  3 observaciones", CYAN),
-            ("EXPERTO", "Nivel 8  -  ruido cuantico", MAGENTA),
-            ("ACERTIJOS", "Pensamiento lateral  -  8 retos", GOLD),
+            ("FACIL", "Retos laterales CON pista", GREEN),
+            ("NORMAL", "Retos laterales, pista a mitad", CYAN),
+            ("EXPERTO", "Retos laterales SIN pista + ruido", MAGENTA),
+            ("ACERTIJOS", "Pensamiento lateral puro - 8 retos", GOLD),
         ];
         for (i, r) in rs.iter().enumerate() {
             let (name, desc, c) = info[i];
@@ -1627,7 +1694,7 @@ impl App {
             "y colapsa al azar al tocar fondo",
             "ENTRELAZADAS: se borran juntas a distancia",
             "TUNEL: la pieza con flecha atraviesa bloques",
-            "NUEVO! Retos laterales en cada partida",
+            "Todos los niveles entrenan pensamiento lateral",
         ];
         let last = rs[3];
         let mut y = last.y + last.h + h * 0.045;
@@ -1710,6 +1777,22 @@ impl App {
         button(l.buttons[2], if g.puzzle { "OPCIONES" } else { "PAUSA" }, CYAN, true, 0.0);
         if let Some(pad) = l.pad {
             self.draw_pad(&pad);
+        }
+        // Pista visual: ilumina el boton clave del reto (segun el nivel)
+        if self.hint_visible() {
+            if let Some(c) = &self.challenge {
+                let r = match c.tech.key_button() {
+                    Some(lateral::KeyBtn::Hold) => Some(l.buttons[0]),
+                    Some(lateral::KeyBtn::Observe) => Some(l.buttons[1]),
+                    Some(lateral::KeyBtn::Rotate) => l.pad.map(|p| p[3]),
+                    None => None,
+                };
+                if let Some(r) = r {
+                    let p = (self.time * 6.0).sin() * 0.5 + 0.5;
+                    let e = 3.0 + 3.0 * p;
+                    draw_rectangle_lines(r.x - e, r.y - e, r.w + 2.0 * e, r.h + 2.0 * e + 4.0, 3.0, alpha(GREEN, 0.5 + 0.5 * p));
+                }
+            }
         }
     }
 
@@ -1973,6 +2056,117 @@ impl App {
         draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.05, 0.7));
     }
 
+    /// Tarjeta inicial: explica cuando y como aparece el pensamiento lateral.
+    fn draw_intro(&self) {
+        let (w, h) = (screen_width(), screen_height());
+        self.draw_overlay_bg();
+        let pw = (w * 0.94).min(h * 0.6);
+        let px = (w - pw) / 2.0;
+        let ph = h * 0.86;
+        let py = h * 0.07;
+        panel(Rect::new(px, py, pw, ph), GOLD);
+        let ls = (ph / 26.0).min(w * 0.042);
+        let cx = w / 2.0;
+        let mut y = py + ls * 2.4;
+        let t = "ENTRENA TU";
+        text_3d_c(t, cx, y, fit_size(t, ls * 2.0, pw * 0.9), GOLD);
+        y += ls * 2.0;
+        let t = "PENSAMIENTO LATERAL";
+        text_3d_c(t, cx, y, fit_size(t, ls * 2.0, pw * 0.9), GOLD);
+        y += ls * 2.0;
+        let lines = [
+            ("CUANDO: cada pocas piezas llega un RETO LATERAL.", WHITE),
+            ("El juego se detiene y te avisa.", alpha(WHITE, 0.8)),
+            ("COMO: te hace una pregunta \"Y si...?\" y te da", WHITE),
+            ("pocas piezas para lograr algo poco obvio.", WHITE),
+        ];
+        for (s, c) in lines.iter() {
+            text_c(s, cx, y, fit_size(s, ls, pw * 0.92), *c);
+            y += ls * 1.45;
+        }
+        y += ls * 0.5;
+        let t = "LAS 5 TECNICAS Y SU HERRAMIENTA";
+        text_c(t, cx, y, fit_size(t, ls * 1.05, pw * 0.92), TUNNEL_C);
+        y += ls * 1.6;
+        let rows = [
+            ("CAMBIA EL ORDEN", "boton GUARDAR", MAGENTA),
+            ("CUESTIONA EL SUPUESTO", "pieza TUNEL (flecha)", TUNNEL_C),
+            ("INVIERTE EL PROBLEMA", "piezas con punto (enlace)", VIOLET),
+            ("MIRA DISTINTO", "boton OBSERVAR", GOLD),
+            ("USA LO INESPERADO", "girar: pieza boca abajo", CYAN),
+        ];
+        for (name, tool, c) in rows.iter() {
+            let s1 = fit_size(name, ls * 0.95, pw * 0.5);
+            draw_text(name, px + pw * 0.05, y, s1, *c);
+            let s2 = fit_size(tool, ls * 0.9, pw * 0.42);
+            draw_text(tool, px + pw * 0.56, y, s2, alpha(WHITE, 0.85));
+            y += ls * 1.5;
+        }
+        y += ls * 0.6;
+        let lv = lateral::level(self.mode);
+        let t = format!("NIVEL {}:", self.mode.name());
+        text_c(&t, cx, y, fit_size(&t, ls * 1.1, pw * 0.9), GREEN);
+        y += ls * 1.4;
+        text_c(lv.label, cx, y, fit_size(lv.label, ls, pw * 0.92), WHITE);
+        y += ls * 1.8;
+        let t = "Superar un reto: puntos extra + 1 OBSERVAR";
+        text_c(t, cx, y, fit_size(t, ls * 0.9, pw * 0.92), alpha(GOLD, 0.9));
+        y += ls * 1.3;
+        let t = "Al final veras tu perfil por tecnica";
+        text_c(t, cx, y, fit_size(t, ls * 0.9, pw * 0.92), alpha(GOLD, 0.9));
+        let p = (self.time * 3.0).sin() * 0.5 + 0.5;
+        let t = "TOCA PARA JUGAR";
+        text_c(t, cx, py + ph - ls * 1.3, fit_size(t, ls * 1.3, pw * 0.8), alpha(GREEN, 0.55 + 0.45 * p));
+    }
+
+    /// Anuncio grande al empezar un reto (el juego espera un toque).
+    fn draw_announce(&self) {
+        let c = match &self.challenge {
+            Some(c) => c,
+            None => return,
+        };
+        let (w, h) = (screen_width(), screen_height());
+        draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.05, 0.55));
+        let pw = (w * 0.92).min(h * 0.6);
+        let px = (w - pw) / 2.0;
+        let ph = h * 0.5;
+        let k = (c.t * 4.0).min(1.0);
+        let py = h * 0.22 + (1.0 - k) * h * 0.05;
+        panel(Rect::new(px, py, pw, ph), GOLD);
+        draw_rectangle_lines(px - 3.0, py - 3.0, pw + 6.0, ph + 6.0, 3.0, alpha(GOLD, 0.5 + 0.4 * (self.time * 5.0).sin()));
+        let ls = (ph / 13.0).min(w * 0.05);
+        let cx = w / 2.0;
+        let mut y = py + ls * 1.9;
+        let t = "RETO LATERAL!";
+        text_3d_c(t, cx, y, fit_size(t, ls * 1.8, pw * 0.9), GOLD);
+        y += ls * 1.9;
+        let t = c.tech.name();
+        text_c(t, cx, y, fit_size(t, ls * 1.15, pw * 0.92), TUNNEL_C);
+        y += ls * 1.9;
+        let q = c.tech.question();
+        text_c(q, cx, y, fit_size(q, ls * 1.05, pw * 0.94), WHITE);
+        y += ls * 1.7;
+        let g = format!("Meta: {}", c.tech.goal());
+        text_c(&g, cx, y, fit_size(&g, ls * 0.9, pw * 0.94), alpha(WHITE, 0.9));
+        y += ls * 1.4;
+        let n = format!("Tienes {} piezas", c.total);
+        text_c(&n, cx, y, fit_size(&n, ls * 0.95, pw * 0.9), GOLD);
+        y += ls * 1.5;
+        if lateral::level(self.mode).hint == 0 {
+            let hint = c.tech.hint();
+            text_c(hint, cx, y, fit_size(hint, ls * 0.8, pw * 0.94), GREEN);
+        } else if lateral::level(self.mode).hint == 1 {
+            let t = "La pista aparecera a mitad del reto";
+            text_c(t, cx, y, fit_size(t, ls * 0.8, pw * 0.94), alpha(WHITE, 0.6));
+        } else {
+            let t = "EXPERTO: sin pistas. Piensa de lado.";
+            text_c(t, cx, y, fit_size(t, ls * 0.8, pw * 0.94), alpha(MAGENTA, 0.9));
+        }
+        let p = (self.time * 3.0).sin() * 0.5 + 0.5;
+        let t = "TOCA PARA EMPEZAR";
+        text_c(t, cx, py + ph - ls * 0.9, fit_size(t, ls * 1.0, pw * 0.8), alpha(GREEN, 0.55 + 0.45 * p));
+    }
+
     /// Botonera de control con iconos dibujados (la fuente no trae flechas).
     fn draw_pad(&self, pad: &[Rect; 6]) {
         let cols = [CYAN, CYAN, VIOLET, VIOLET, GREEN, MAGENTA];
@@ -2035,8 +2229,16 @@ impl App {
         let w = screen_width();
         let fr = (l.cell * 0.3).max(4.0);
         let space = (l.by - fr - l.top).max(l.cell * 1.2);
-        let gs = (space / 3.5).min(l.cell * 0.62);
-        let base = l.by - fr - 6.0;
+        let show_hint = self.hint_visible();
+        let gs = (space / if show_hint { 4.6 } else { 3.5 }).min(l.cell * 0.62);
+        let base = l.by - fr - 6.0 - if show_hint { gs * 1.15 } else { 0.0 };
+        if show_hint {
+            if let Some(c) = &self.challenge {
+                let hs = fit_size(c.tech.hint(), gs * 0.85, w * 0.96);
+                let p = (self.time * 4.0).sin() * 0.5 + 0.5;
+                text_c(c.tech.hint(), w / 2.0, base + gs * 1.15, hs, alpha(GREEN, 0.7 + 0.3 * p));
+            }
+        }
         if let Some(c) = &self.challenge {
             let pulse = (self.time * 5.0).sin() * 0.5 + 0.5;
             // Marco dorado alrededor del tablero mientras hay reto
@@ -2063,9 +2265,18 @@ impl App {
             let s2 = fit_size(tech.lesson(), gs * 0.85, w * 0.95);
             text_c(tech.lesson(), w / 2.0, base, s2, alpha(WHITE, 0.85 * a));
         } else {
-            let t1 = format!("Proximo reto lateral en {} piezas", self.next_ch);
-            let s1 = fit_size(&t1, gs * 0.85, w * 0.9);
-            text_c(&t1, w / 2.0, base, s1, alpha(WHITE, 0.45));
+            let t1 = format!("PENSAMIENTO LATERAL: proximo reto en {} piezas", self.next_ch);
+            let s1 = fit_size(&t1, gs * 0.95, w * 0.94);
+            text_c(&t1, w / 2.0, base - gs * 0.9, s1, alpha(GOLD, 0.85));
+            // Puntos: cuantas piezas faltan
+            let n = self.next_ch.min(10);
+            let r = (gs * 0.22).max(2.5);
+            let gap = r * 3.2;
+            let x0 = w / 2.0 - (n as f32 - 1.0) * gap / 2.0;
+            for i in 0..n {
+                let pulse = if i == 0 { (self.time * 5.0).sin() * 0.5 + 0.5 } else { 0.0 };
+                draw_circle(x0 + i as f32 * gap, base - gs * 0.25, r * (1.0 + 0.3 * pulse), alpha(GOLD, 0.5 + 0.5 * pulse));
+            }
         }
     }
 

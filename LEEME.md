@@ -18,7 +18,10 @@
   ("deja el tablero vacío" o "borra N líneas"). Sin gravedad: piensa con calma. Jugando "normal" son
   imposibles; cada uno exige un truco (túnel, entrelazado, guardar, observar…). Botón OPCIONES → PISTA.
   Todos están verificados por computadora: tienen solución y no se resuelven sin su truco.
-- **RETOS LATERALES en cada partida (nuevo)**: cada 5–10 piezas aparece un reto de pensamiento lateral con
+- **Los 3 niveles entrenan pensamiento lateral**: al empezar, una tarjeta explica cuándo y cómo. Cada reto
+  detiene el juego con un anuncio grande. FÁCIL = retos frecuentes, +2 piezas y pista (se ilumina el botón
+  clave); NORMAL = pista a mitad del reto; EXPERTO = retos seguidos, menos piezas y sin pistas.
+- **RETOS LATERALES en cada partida**: cada 5–10 piezas aparece un reto de pensamiento lateral con
   una pregunta "¿Y si…?" y pocas piezas para lograrlo. Entrena 5 técnicas: CAMBIA EL ORDEN (guardar),
   CUESTIONA EL SUPUESTO (túnel), INVIERTE EL PROBLEMA (entrelazado), MIRA DISTINTO (observar) y USA LO
   INESPERADO (pieza boca abajo). El juego mete las piezas necesarias. Superarlo da puntos y una carga de
