@@ -9,6 +9,9 @@
   El botón **OBSERVAR** gasta una carga y la colapsa en la posición que cae más profundo.
 - **ENTRELAZAMIENTO**: piezas marcadas con un punto blanco se enlazan en pareja. Si borras una línea que toca
   una, la otra desaparece también, esté donde esté.
+- **TÚNEL CUÁNTICO (nuevo)**: piezas con una flecha y un anillo verde agua. Al tocar fondo atraviesan hasta
+  4 filas de bloques y reaparecen en el hueco de abajo (rellenan huecos tapados). Una guía verde punteada
+  muestra dónde terminarán. La tercera pieza de cada partida siempre es TÚNEL.
 - Dificultad: FÁCIL (nivel 1), NORMAL (nivel 4), EXPERTO (nivel 8 + líneas de "ruido cuántico" que suben).
   La velocidad aumenta cada 10 líneas.
 
