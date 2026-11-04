@@ -130,6 +130,24 @@ impl Stats {
         }
         best
     }
+    /// Tecnica a practicar segun lo ya intentado (menor % de exito entre las probadas).
+    pub fn weakest_tried(&self) -> Tech {
+        let mut best = self.weakest();
+        let mut best_v = f32::MAX;
+        for t in ALL.iter() {
+            let e = self.s[t.idx()];
+            if e.tried == 0 {
+                continue;
+            }
+            let v = e.ok as f32 / e.tried as f32;
+            if v < best_v {
+                best_v = v;
+                best = *t;
+            }
+        }
+        best
+    }
+
     /// Indice lateral 0..100 combinando exito y variedad de tecnicas.
     pub fn index(&self) -> u32 {
         let (ok, tried) = self.total();

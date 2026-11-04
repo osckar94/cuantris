@@ -1925,7 +1925,7 @@ impl App {
         }
         y += ls * 1.5;
         if tried > 0 {
-            let weak = self.game_stats.weakest();
+            let weak = self.game_stats.weakest_tried();
             let p = format!("Practica: {}", weak.name());
             text_c(&p, w / 2.0, y, fit_size(&p, ls * 0.9, pw * 0.92), TUNNEL_C);
             y += ls * 1.2;
