@@ -12,6 +12,10 @@
 - **TÚNEL CUÁNTICO (nuevo)**: piezas con una flecha y un anillo verde agua. Al tocar fondo atraviesan hasta
   4 filas de bloques y reaparecen en el hueco de abajo (rellenan huecos tapados). Una guía verde punteada
   muestra dónde terminarán. La tercera pieza de cada partida siempre es TÚNEL.
+- **ACERTIJOS — pensamiento lateral (nuevo)**: 8 retos con tablero armado, piezas contadas y una meta
+  ("deja el tablero vacío" o "borra N líneas"). Sin gravedad: piensa con calma. Jugando "normal" son
+  imposibles; cada uno exige un truco (túnel, entrelazado, guardar, observar…). Botón OPCIONES → PISTA.
+  Todos están verificados por computadora: tienen solución y no se resuelven sin su truco.
 - Dificultad: FÁCIL (nivel 1), NORMAL (nivel 4), EXPERTO (nivel 8 + líneas de "ruido cuántico" que suben).
   La velocidad aumenta cada 10 líneas.
 

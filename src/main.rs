@@ -1,6 +1,9 @@
 mod game;
 mod pieces;
+mod puzzles;
 mod sfx;
+
+use puzzles::{Goal, PUZZLES};
 
 use game::{Event, Game, Mode, Spec, H, HIDDEN, W};
 use macroquad::prelude::*;
@@ -39,6 +42,12 @@ enum State {
     Playing,
     Paused,
     Over,
+    /// Lista de acertijos
+    Puzzles,
+    /// Acertijo resuelto
+    PzWin,
+    /// Acertijo fallado (se acabaron las piezas)
+    PzFail,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -158,17 +167,41 @@ fn lay() -> Lay {
     }
 }
 
-fn menu_rects() -> [Rect; 3] {
+fn menu_rects() -> [Rect; 4] {
     let (w, h) = (screen_width(), screen_height());
     let bw = (w * 0.74).min(h * 0.5);
-    let bh = (h * 0.085).min(bw * 0.24);
+    let bh = (h * 0.075).min(bw * 0.22);
     let x = (w - bw) / 2.0;
-    let y0 = h * 0.36;
+    let y0 = h * 0.31;
+    let st = bh * 1.28;
     [
         Rect::new(x, y0, bw, bh),
-        Rect::new(x, y0 + bh * 1.3, bw, bh),
-        Rect::new(x, y0 + bh * 2.6, bw, bh),
+        Rect::new(x, y0 + st, bw, bh),
+        Rect::new(x, y0 + st * 2.0, bw, bh),
+        Rect::new(x, y0 + st * 3.0, bw, bh),
     ]
+}
+
+/// Tarjetas de la lista de acertijos (2 columnas) + boton VOLVER.
+fn puzzle_rects() -> (Vec<Rect>, Rect) {
+    let (w, h) = (screen_width(), screen_height());
+    let area = (w * 0.92).min(h * 0.62);
+    let x0 = (w - area) / 2.0;
+    let gap = area * 0.04;
+    let cw = (area - gap) / 2.0;
+    let ch = (h * 0.12).min(cw * 0.62);
+    let y0 = h * 0.25;
+    let mut v = Vec::new();
+    for i in 0..PUZZLES.len() {
+        let col = (i % 2) as f32;
+        let row = (i / 2) as f32;
+        v.push(Rect::new(x0 + col * (cw + gap), y0 + row * (ch + gap * 1.2), cw, ch));
+    }
+    let rows = ((PUZZLES.len() + 1) / 2) as f32;
+    let by = y0 + rows * (ch + gap * 1.2) + gap;
+    let bw = area * 0.6;
+    let back = Rect::new((w - bw) / 2.0, by, bw, (h * 0.065).min(bw * 0.25));
+    (v, back)
 }
 
 fn overlay_rects(n: usize) -> Vec<Rect> {
@@ -481,6 +514,10 @@ struct App {
     sfx: Sfx,
     menu_pieces: Vec<MenuPiece>,
     active: Vec<u64>,
+    /// Acertijo en juego (indice en PUZZLES)
+    puzzle: Option<usize>,
+    solved: Vec<bool>,
+    show_hint: bool,
 }
 
 impl App {
@@ -517,6 +554,59 @@ impl App {
             arr_t: 0.0,
             sfx,
             menu_pieces,
+            puzzle: None,
+            solved: vec![false; PUZZLES.len()],
+            show_hint: false,
+        }
+    }
+
+    fn clear_fx(&mut self) {
+        self.particles.clear();
+        self.popups.clear();
+        self.fades.clear();
+        self.flashes.clear();
+        self.shake = 0.0;
+    }
+
+    fn start_puzzle(&mut self, i: usize, hint: bool) {
+        let i = i.min(PUZZLES.len() - 1);
+        self.puzzle = Some(i);
+        self.game = Game::from_puzzle(&PUZZLES[i]);
+        self.clear_fx();
+        self.show_hint = hint;
+        self.new_best = false;
+        self.sfx.play(S::Click, 0.5);
+        self.set_state(State::Playing);
+        let l = lay();
+        let name = format!("ACERTIJO {}", i + 1);
+        self.popup(&l, &name, GOLD, true);
+    }
+
+    /// Revisa si el acertijo se resolvio o se acabaron las piezas.
+    fn check_puzzle(&mut self) {
+        let i = match self.puzzle {
+            Some(i) => i,
+            None => return,
+        };
+        if self.state != State::Playing {
+            return;
+        }
+        let done = match PUZZLES[i].goal {
+            Goal::ClearAll => self.game.board_empty(),
+            Goal::Lines(n) => self.game.lines >= n,
+        };
+        if done {
+            self.solved[i] = true;
+            self.sfx.play(S::Tetra, 0.7);
+            let l = lay();
+            for k in 0..30 {
+                let p = vec2(l.bx + l.cell * (k % 10) as f32 + l.cell * 0.5, l.by + l.cell * (k / 10) as f32 * 6.0 + l.cell * 3.0);
+                self.burst(p, if k % 2 == 0 { GOLD } else { GREEN }, 6, l.cell * 8.0, l.cell * 0.2);
+            }
+            self.set_state(State::PzWin);
+        } else if self.game.out_of_pieces || self.game.over {
+            self.sfx.play(S::Over, 0.5);
+            self.set_state(State::PzFail);
         }
     }
 
@@ -527,6 +617,7 @@ impl App {
     }
 
     fn start(&mut self, mode: Mode) {
+        self.puzzle = None;
         self.mode = mode;
         self.game = Game::new(mode);
         self.particles.clear();
@@ -621,6 +712,9 @@ impl App {
             State::Playing => self.update_play(dt, &ptrs, &l),
             State::Paused => self.update_pause(&ptrs, &l),
             State::Over => self.update_over(&ptrs, &l),
+            State::Puzzles => self.update_puzzles(&ptrs, &l),
+            State::PzWin => self.update_pzwin(&ptrs, &l),
+            State::PzFail => self.update_pzfail(&ptrs, &l),
         }
         self.update_fx(dt, &l);
         let playing = self.state == State::Playing;
@@ -645,13 +739,20 @@ impl App {
                 }
                 for (i, r) in rs.iter().enumerate() {
                     if r.contains(pos) {
-                        self.start(MODES[i]);
+                        if i < 3 {
+                            self.start(MODES[i]);
+                        } else {
+                            self.sfx.play(S::Click, 0.5);
+                            self.set_state(State::Puzzles);
+                        }
                         return;
                     }
                 }
             }
         }
-        if is_key_pressed(KeyCode::Key1) {
+        if is_key_pressed(KeyCode::Key4) {
+            self.set_state(State::Puzzles);
+        } else if is_key_pressed(KeyCode::Key1) {
             self.start(Mode::Facil);
         } else if is_key_pressed(KeyCode::Key2) || is_key_pressed(KeyCode::Enter) {
             self.start(Mode::Normal);
@@ -816,9 +917,128 @@ impl App {
         let soft = is_key_down(KeyCode::Down);
         self.game.update(dt, soft);
         self.process_events(l);
+        self.check_puzzle();
+    }
+
+    fn update_puzzles(&mut self, ptrs: &[Ptr], l: &Lay) {
+        let (cards, back) = puzzle_rects();
+        for p in ptrs {
+            if let Ptr::Down(_, pos) = *p {
+                if self.sound_hit(pos, l) {
+                    continue;
+                }
+                for (i, r) in cards.iter().enumerate() {
+                    if r.contains(pos) {
+                        self.start_puzzle(i, false);
+                        return;
+                    }
+                }
+                if back.contains(pos) {
+                    self.sfx.play(S::Click, 0.5);
+                    self.set_state(State::Menu);
+                    return;
+                }
+            }
+        }
+        if is_key_pressed(KeyCode::Escape) {
+            self.set_state(State::Menu);
+        }
+    }
+
+    fn update_pzwin(&mut self, ptrs: &[Ptr], l: &Lay) {
+        let rs = overlay_rects(2);
+        let i = self.puzzle.unwrap_or(0);
+        for p in ptrs {
+            if let Ptr::Down(_, pos) = *p {
+                if self.sound_hit(pos, l) {
+                    continue;
+                }
+                if rs[0].contains(pos) {
+                    if i + 1 < PUZZLES.len() {
+                        self.start_puzzle(i + 1, false);
+                    } else {
+                        self.set_state(State::Puzzles);
+                    }
+                    return;
+                }
+                if rs[1].contains(pos) {
+                    self.sfx.play(S::Click, 0.5);
+                    self.set_state(State::Puzzles);
+                    return;
+                }
+            }
+        }
+        if is_key_pressed(KeyCode::Enter) {
+            self.start_puzzle(i + 1, false);
+        }
+    }
+
+    fn update_pzfail(&mut self, ptrs: &[Ptr], l: &Lay) {
+        let rs = overlay_rects(3);
+        let i = self.puzzle.unwrap_or(0);
+        for p in ptrs {
+            if let Ptr::Down(_, pos) = *p {
+                if self.sound_hit(pos, l) {
+                    continue;
+                }
+                if rs[0].contains(pos) {
+                    let h = self.show_hint;
+                    self.start_puzzle(i, h);
+                    return;
+                }
+                if rs[1].contains(pos) {
+                    self.start_puzzle(i, true);
+                    return;
+                }
+                if rs[2].contains(pos) {
+                    self.sfx.play(S::Click, 0.5);
+                    self.set_state(State::Puzzles);
+                    return;
+                }
+            }
+        }
+        if is_key_pressed(KeyCode::Enter) {
+            let h = self.show_hint;
+            self.start_puzzle(i, h);
+        }
     }
 
     fn update_pause(&mut self, ptrs: &[Ptr], l: &Lay) {
+        if let Some(i) = self.puzzle {
+            let rs = overlay_rects(4);
+            for p in ptrs {
+                if let Ptr::Down(_, pos) = *p {
+                    if self.sound_hit(pos, l) {
+                        continue;
+                    }
+                    if rs[0].contains(pos) {
+                        self.sfx.play(S::Click, 0.5);
+                        self.set_state(State::Playing);
+                        return;
+                    }
+                    if rs[1].contains(pos) {
+                        self.show_hint = true;
+                        self.sfx.play(S::Entangle, 0.5);
+                        self.set_state(State::Playing);
+                        return;
+                    }
+                    if rs[2].contains(pos) {
+                        let h = self.show_hint;
+                        self.start_puzzle(i, h);
+                        return;
+                    }
+                    if rs[3].contains(pos) {
+                        self.sfx.play(S::Click, 0.5);
+                        self.set_state(State::Puzzles);
+                        return;
+                    }
+                }
+            }
+            if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::P) || is_key_pressed(KeyCode::Enter) {
+                self.set_state(State::Playing);
+            }
+            return;
+        }
         let rs = overlay_rects(3);
         for p in ptrs {
             if let Ptr::Down(_, pos) = *p {
@@ -1012,6 +1232,9 @@ impl App {
                     self.popup(l, &format!("TUNEL +{}", points), TUNNEL_C, false);
                     self.sfx.play(S::Tunnel, 0.6);
                 }
+                Event::GameOver if self.puzzle.is_some() => {
+                    // En acertijo, check_puzzle lo trata como "no funciono".
+                }
                 Event::GameOver => {
                     if self.game.score > self.best {
                         self.best = self.game.score;
@@ -1067,12 +1290,17 @@ impl App {
         draw_bg(self.time);
         match self.state {
             State::Menu => self.draw_menu(),
+            State::Puzzles => self.draw_puzzles(),
             _ => {
                 self.draw_game(&l);
                 if self.state == State::Paused {
                     self.draw_pause();
                 } else if self.state == State::Over {
                     self.draw_over();
+                } else if self.state == State::PzWin {
+                    self.draw_pzwin();
+                } else if self.state == State::PzFail {
+                    self.draw_pzfail();
                 }
             }
         }
@@ -1118,6 +1346,7 @@ impl App {
             ("FACIL", "Nivel 1  -  4 observaciones", GREEN),
             ("NORMAL", "Nivel 4  -  3 observaciones", CYAN),
             ("EXPERTO", "Nivel 8  -  ruido cuantico", MAGENTA),
+            ("ACERTIJOS", "Pensamiento lateral  -  8 retos", GOLD),
         ];
         for (i, r) in rs.iter().enumerate() {
             let (name, desc, c) = info[i];
@@ -1146,7 +1375,7 @@ impl App {
             "NUEVO! TUNEL: la pieza con flecha atraviesa",
             "hasta 4 filas y rellena huecos tapados",
         ];
-        let last = rs[2];
+        let last = rs[3];
         let mut y = last.y + last.h + h * 0.045;
         let hs = help
             .iter()
@@ -1171,10 +1400,35 @@ impl App {
 
     fn draw_game(&self, l: &Lay) {
         let w = screen_width();
-        let ts = fit_size("CUANTRIS", l.top * 0.55, w * 0.5);
-        text_3d_c("CUANTRIS", w / 2.0, l.top * 0.7, ts, CYAN);
-        let ms = fit_size(self.game.mode.name(), l.top * 0.28, w * 0.25);
-        draw_text(self.game.mode.name(), w * 0.04, l.top * 0.62, ms, alpha(MAGENTA, 0.8));
+        if let Some(i) = self.puzzle {
+            let p = &PUZZLES[i];
+            let ts = fit_size(p.name, l.top * 0.5, w * 0.62);
+            text_3d_c(p.name, w / 2.0, l.top * 0.7, ts, GOLD);
+            let tag = format!("RETO {}/{}", i + 1, PUZZLES.len());
+            let ms = fit_size(&tag, l.top * 0.26, w * 0.17);
+            draw_text(&tag, w * 0.03, l.top * 0.62, ms, alpha(TUNNEL_C, 0.85));
+            // Meta y pista entre el titulo y el tablero
+            let fr = (l.cell * 0.3).max(4.0);
+            let space = (l.by - fr - l.top).max(l.cell * 1.2);
+            let lines_n = if self.show_hint { 2.6 } else { 1.4 };
+            let gs = (space / lines_n).min(l.cell * 0.7);
+            let goal = p.goal.text();
+            let gsz = fit_size(&goal, gs, w * 0.94);
+            let mut y = l.by - fr - 6.0 - if self.show_hint { gs * 1.2 } else { 0.0 };
+            text_c(&goal, w / 2.0 + 1.0, y + 1.0, gsz, Color::new(0.0, 0.0, 0.0, 0.7));
+            text_c(&goal, w / 2.0, y, gsz, WHITE);
+            if self.show_hint {
+                y += gs * 1.2;
+                let hint = format!("Pista: {}", p.hint);
+                let hsz = fit_size(&hint, gs * 0.85, w * 0.94);
+                text_c(&hint, w / 2.0, y, hsz, GOLD);
+            }
+        } else {
+            let ts = fit_size("CUANTRIS", l.top * 0.55, w * 0.5);
+            text_3d_c("CUANTRIS", w / 2.0, l.top * 0.7, ts, CYAN);
+            let ms = fit_size(self.game.mode.name(), l.top * 0.28, w * 0.25);
+            draw_text(self.game.mode.name(), w * 0.04, l.top * 0.62, ms, alpha(MAGENTA, 0.8));
+        }
         let off = vec2(
             (self.time * 91.0).sin() * self.shake,
             (self.time * 77.0).cos() * self.shake,
@@ -1185,9 +1439,10 @@ impl App {
         let can_hold = !g.hold_used && g.active.is_some();
         let can_obs = g.charges > 0 && g.active.map(|a| a.dx.is_some()).unwrap_or(false);
         button(l.buttons[0], "GUARDAR", MAGENTA, can_hold, 0.0);
-        let pulse = if can_obs { (self.time * 7.0).sin() * 0.5 + 0.5 } else { 0.0 };
+        // En acertijo el boton no parpadea: descubrir que hay que observar es parte del reto.
+        let pulse = if can_obs && !g.puzzle { (self.time * 7.0).sin() * 0.5 + 0.5 } else { 0.0 };
         button(l.buttons[1], &format!("OBSERVAR {}", g.charges), GOLD, can_obs, pulse);
-        button(l.buttons[2], "PAUSA", CYAN, true, 0.0);
+        button(l.buttons[2], if g.puzzle { "OPCIONES" } else { "PAUSA" }, CYAN, true, 0.0);
     }
 
     fn draw_board(&self, l: &Lay, off: Vec2) {
@@ -1408,18 +1663,38 @@ impl App {
             }
         }
         y += s * 2.2 + s * 0.45;
-        let stats = [
-            ("PUNTOS", g.score.to_string()),
-            ("NIVEL", g.level.to_string()),
-            ("LINEAS", g.lines.to_string()),
-        ];
+        let stats = if let Some(i) = self.puzzle {
+            let left = g.remaining() + g.active.map(|_| 1).unwrap_or(0);
+            let goal = match PUZZLES[i].goal {
+                Goal::Lines(n) => format!("{}/{}", g.lines.min(n), n),
+                Goal::ClearAll => {
+                    let n = g.grid.iter().flatten().filter(|c| c.kind != 0).count();
+                    format!("{}", n)
+                }
+            };
+            let gl = match PUZZLES[i].goal {
+                Goal::Lines(_) => "LINEAS",
+                Goal::ClearAll => "BLOQUES",
+            };
+            [
+                ("PIEZAS", left.to_string()),
+                (gl, goal),
+                ("OBSERVAR", g.charges.to_string()),
+            ]
+        } else {
+            [
+                ("PUNTOS", g.score.to_string()),
+                ("NIVEL", g.level.to_string()),
+                ("LINEAS", g.lines.to_string()),
+            ]
+        };
         for (name, val) in stats.iter() {
             draw_text(name, x, y + lab * 0.8, lab * 0.9, alpha(WHITE, 0.55));
             let vs = fit_size(val, s * 0.9, sw);
             draw_text(val, x, y + lab + vs * 0.85, vs, WHITE);
             y += lab + s * 1.15;
         }
-        if self.best > 0 {
+        if self.best > 0 && self.puzzle.is_none() {
             let bt = format!("REC {}", self.best.max(g.score));
             let bs = fit_size(&bt, lab * 0.9, sw);
             draw_text(&bt, x, y + bs, bs, alpha(GOLD, 0.8));
@@ -1430,11 +1705,93 @@ impl App {
         draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.05, 0.7));
     }
 
+    fn draw_puzzles(&self) {
+        let (w, h) = (screen_width(), screen_height());
+        let ts = fit_size("ACERTIJOS", w * 0.15, w * 0.86);
+        text_3d_c("ACERTIJOS", w / 2.0, h * 0.11, ts, GOLD);
+        let sub = "Pensamiento lateral: cada reto tiene un truco";
+        let ss = fit_size(sub, ts * 0.3, w * 0.9);
+        text_c(sub, w / 2.0, h * 0.11 + ts * 0.55, ss, alpha(TUNNEL_C, 0.9));
+        let sub2 = "Sin gravedad: piensa con calma";
+        let ss2 = fit_size(sub2, ss, w * 0.9);
+        text_c(sub2, w / 2.0, h * 0.11 + ts * 0.55 + ss * 1.5, ss2, alpha(WHITE, 0.6));
+        let (cards, back) = puzzle_rects();
+        let n_ok = self.solved.iter().filter(|s| **s).count();
+        let prog = format!("Resueltos: {} / {}", n_ok, PUZZLES.len());
+        let ps = fit_size(&prog, ss, w * 0.6);
+        text_c(&prog, w / 2.0, cards[0].y - ps * 0.7, ps, alpha(GOLD, 0.9));
+        for (i, r) in cards.iter().enumerate() {
+            let p = &PUZZLES[i];
+            let ok = self.solved[i];
+            let c = if ok { GREEN } else { [CYAN, VIOLET, MAGENTA, GOLD][i % 4] };
+            button(*r, "", c, true, 0.0);
+            let num = format!("{}", i + 1);
+            let ns = r.h * 0.5;
+            text_c(&num, r.x + r.h * 0.32 + 2.0, r.y + r.h * 0.55 + 2.0, ns, Color::new(0.0, 0.0, 0.0, 0.6));
+            text_c(&num, r.x + r.h * 0.32, r.y + r.h * 0.55, ns, mix(c, WHITE, 0.5));
+            let tx = r.x + r.h * 0.62;
+            let tw = r.w - r.h * 0.7;
+            let s1 = fit_size(p.name, r.h * 0.26, tw);
+            draw_text(p.name, tx, r.y + r.h * 0.42, s1, WHITE);
+            let info = if ok { format!("OK - {}", p.trick) } else { p.goal.text().replace("Meta: ", "") };
+            let s2 = fit_size(&info, r.h * 0.17, tw);
+            draw_text(&info, tx, r.y + r.h * 0.72, s2, alpha(if ok { GREEN } else { c }, 0.9));
+        }
+        button(back, "VOLVER", MAGENTA, true, 0.0);
+    }
+
+    fn draw_pzwin(&self) {
+        self.draw_overlay_bg();
+        let (w, h) = (screen_width(), screen_height());
+        let i = self.puzzle.unwrap_or(0);
+        let ts = fit_size("RESUELTO!", w * 0.15, w * 0.85);
+        let bounce = (self.time * 4.0).sin().abs() * ts * 0.05;
+        text_3d_c("RESUELTO!", w / 2.0, h * 0.28 - bounce, ts, GREEN);
+        let t1 = format!("Truco: {}", PUZZLES[i].trick);
+        let s1 = fit_size(&t1, w * 0.055, w * 0.9);
+        text_c(&t1, w / 2.0, h * 0.28 + ts * 0.9, s1, TUNNEL_C);
+        let t2 = "Pensaste de lado. Bien hecho.";
+        let s2 = fit_size(t2, s1 * 0.85, w * 0.9);
+        text_c(t2, w / 2.0, h * 0.28 + ts * 0.9 + s1 * 1.6, s2, alpha(WHITE, 0.8));
+        let rs = overlay_rects(2);
+        let next = if i + 1 < PUZZLES.len() { "SIGUIENTE" } else { "VER TODOS" };
+        button(rs[0], next, GREEN, true, (self.time * 4.0).sin() * 0.5 + 0.5);
+        button(rs[1], "ACERTIJOS", GOLD, true, 0.0);
+    }
+
+    fn draw_pzfail(&self) {
+        self.draw_overlay_bg();
+        let (w, h) = (screen_width(), screen_height());
+        let i = self.puzzle.unwrap_or(0);
+        let ts = fit_size("NO FUNCIONO", w * 0.13, w * 0.85);
+        text_3d_c("NO FUNCIONO", w / 2.0, h * 0.27, ts, MAGENTA);
+        let t1 = "Piensa de lado: lo obvio no es la salida";
+        let s1 = fit_size(t1, w * 0.045, w * 0.9);
+        text_c(t1, w / 2.0, h * 0.27 + ts * 0.9, s1, alpha(WHITE, 0.85));
+        if self.show_hint {
+            let hint = format!("Pista: {}", PUZZLES[i].hint);
+            let s2 = fit_size(&hint, s1, w * 0.92);
+            text_c(&hint, w / 2.0, h * 0.27 + ts * 0.9 + s1 * 1.8, s2, GOLD);
+        }
+        let rs = overlay_rects(3);
+        button(rs[0], "REINTENTAR", GREEN, true, 0.0);
+        button(rs[1], "PISTA", GOLD, true, 0.0);
+        button(rs[2], "ACERTIJOS", MAGENTA, true, 0.0);
+    }
+
     fn draw_pause(&self) {
         self.draw_overlay_bg();
         let (w, h) = (screen_width(), screen_height());
         let ts = fit_size("PAUSA", w * 0.16, w * 0.8);
         text_3d_c("PAUSA", w / 2.0, h * 0.38, ts, CYAN);
+        if self.puzzle.is_some() {
+            let rs = overlay_rects(4);
+            button(rs[0], "CONTINUAR", GREEN, true, 0.0);
+            button(rs[1], "PISTA", GOLD, true, 0.0);
+            button(rs[2], "REINICIAR", CYAN, true, 0.0);
+            button(rs[3], "ACERTIJOS", MAGENTA, true, 0.0);
+            return;
+        }
         let rs = overlay_rects(3);
         button(rs[0], "CONTINUAR", GREEN, true, 0.0);
         button(rs[1], "REINICIAR", GOLD, true, 0.0);

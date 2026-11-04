@@ -189,6 +189,10 @@ pub struct Game {
     pending_pair: Option<u32>,
     locks: u32,
     spawned: u32,
+    /// Modo acertijo: sin gravedad, piezas contadas, sin piezas al azar.
+    pub puzzle: bool,
+    /// En acertijo: ya no quedan piezas por jugar.
+    pub out_of_pieces: bool,
 }
 
 impl Game {
@@ -217,6 +221,8 @@ impl Game {
             pending_pair: None,
             locks: 0,
             spawned: 0,
+            puzzle: false,
+            out_of_pieces: false,
         };
         for i in 0..5 {
             let s = g.gen_spec(i < 2);
@@ -230,6 +236,58 @@ impl Game {
         }
         g.spawn_next();
         g
+    }
+
+    /// Crea una partida de acertijo a partir de su descripcion.
+    pub fn from_puzzle(p: &crate::puzzles::Puzzle) -> Game {
+        let mut g = Game::new(Mode::Facil);
+        g.puzzle = true;
+        g.grid = [[Cell::default(); W as usize]; H as usize];
+        g.queue.clear();
+        g.active = None;
+        g.events.clear();
+        g.charges = p.charges;
+        g.level = 1;
+        let start = H as usize - p.rows.len();
+        let mut maxg = 0;
+        for (i, row) in p.rows.iter().enumerate() {
+            for (x, ch) in row.chars().enumerate().take(W as usize) {
+                let cell = match ch {
+                    '#' => Cell { kind: GARBAGE, ent: 0 },
+                    c if c.is_ascii_alphabetic() => {
+                        let grp = (c.to_ascii_uppercase() as u32) - 64;
+                        maxg = maxg.max(grp);
+                        let half = if c.is_ascii_uppercase() { 0 } else { 1 };
+                        Cell { kind: 3, ent: grp * 2 + half }
+                    }
+                    _ => Cell::default(),
+                };
+                g.grid[start + i][x] = cell;
+            }
+        }
+        g.next_group = maxg;
+        g.pending_pair = p.pending.map(|c| (c.to_ascii_uppercase() as u32) - 64);
+        for s in p.pieces.iter() {
+            let kind = "IOTSZJL".find(s.chars().next().unwrap_or('I')).unwrap_or(0);
+            let flags = &s[1..];
+            g.queue.push_back(Spec {
+                kind,
+                superpos: flags.contains('s'),
+                entangled: flags.contains('e'),
+                tunnel: flags.contains('t'),
+            });
+        }
+        g.spawn_next();
+        g
+    }
+
+    /// Piezas que faltan por jugar en un acertijo (sin contar la actual).
+    pub fn remaining(&self) -> usize {
+        self.queue.len() + self.hold.map(|_| 1).unwrap_or(0)
+    }
+
+    pub fn board_empty(&self) -> bool {
+        self.grid.iter().all(|r| r.iter().all(|c| c.kind == 0))
     }
 
     fn free(&self, x: i32, y: i32) -> bool {
@@ -305,7 +363,13 @@ impl Game {
     /// Donde terminaria una pieza que esta apoyada en `y` si atraviesa bloques.
     /// Busca hasta TUNNEL_DEPTH filas mas abajo un sitio libre y deja caer ahi.
     pub fn tunnel_target(&self, kind: usize, rot: usize, x: i32, y: i32) -> Option<i32> {
-        for yy in (y + 2)..=(y + 1 + TUNNEL_DEPTH) {
+        // La pieza puede bajar su altura + TUNNEL_DEPTH filas: asi cualquier
+        // forma atraviesa hasta TUNNEL_DEPTH filas de bloques.
+        let cs = pieces::cells(kind, rot);
+        let miny = cs.iter().map(|c| c.1).min().unwrap_or(0);
+        let maxy = cs.iter().map(|c| c.1).max().unwrap_or(0);
+        let h = maxy - miny + 1;
+        for yy in (y + 2)..=(y + h + TUNNEL_DEPTH) {
             if self.fits(kind, rot, x, yy) {
                 return Some(self.drop_y(kind, rot, x, yy));
             }
@@ -393,6 +457,23 @@ impl Game {
     }
 
     fn spawn_next(&mut self) {
+        if self.puzzle {
+            // En acertijo no hay piezas al azar: si se acaba la cola, se usa la
+            // guardada; si tampoco hay, se terminaron las piezas.
+            let s = match self.queue.pop_front() {
+                Some(s) => s,
+                None => match self.hold.take() {
+                    Some(h) => h,
+                    None => {
+                        self.active = None;
+                        self.out_of_pieces = true;
+                        return;
+                    }
+                },
+            };
+            self.spawn(s);
+            return;
+        }
         let s = match self.queue.pop_front() {
             Some(s) => s,
             None => self.gen_spec(false),
@@ -571,6 +652,10 @@ impl Game {
         if self.hold_used || self.over {
             return false;
         }
+        // En acertijo, guardar sin nada que sacar dejaria el tablero sin pieza.
+        if self.puzzle && self.hold.is_none() && self.queue.is_empty() {
+            return false;
+        }
         if let Some(a) = self.active {
             let mut spec = a.spec;
             spec.superpos = a.dx.is_some();
@@ -589,7 +674,17 @@ impl Game {
         if self.over || self.active.is_none() {
             return;
         }
-        let g = self.gravity_interval();
+        let g = if self.puzzle {
+            // Sin gravedad: la pieza solo baja si la arrastras o la sueltas.
+            if !soft {
+                self.gravity_t = 0.0;
+                f32::INFINITY
+            } else {
+                1.0
+            }
+        } else {
+            self.gravity_interval()
+        };
         let interval = if soft { (g / 20.0).min(0.04) } else { g };
         self.gravity_t += dt;
         while self.gravity_t >= interval {
