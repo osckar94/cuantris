@@ -8,6 +8,8 @@ pub const HIDDEN: i32 = 2;
 pub const GARBAGE: u8 = 8;
 const LOCK_DELAY: f32 = 0.5;
 const MAX_RESETS: u32 = 15;
+/// Cuantas filas de bloques puede atravesar una pieza TUNEL.
+pub const TUNNEL_DEPTH: i32 = 4;
 
 pub fn rand_int(n: i32) -> i32 {
     let r = (gen_range(0.0f32, 1.0f32) * n as f32) as i32;
@@ -61,6 +63,13 @@ impl Mode {
             Mode::Experto => 0.18,
         }
     }
+    fn tunnel_prob(&self) -> f32 {
+        match self {
+            Mode::Facil => 0.11,
+            Mode::Normal => 0.09,
+            Mode::Experto => 0.08,
+        }
+    }
     fn start_charges(&self) -> u32 {
         match self {
             Mode::Facil => 4,
@@ -96,6 +105,8 @@ pub struct Spec {
     pub kind: usize,
     pub superpos: bool,
     pub entangled: bool,
+    /// Efecto tunel: al tocar fondo atraviesa bloques y cae al hueco de abajo.
+    pub tunnel: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -143,6 +154,14 @@ pub enum Event {
         rot: usize,
         x: i32,
         y: i32,
+    },
+    Tunnel {
+        kind: usize,
+        rot: usize,
+        x: i32,
+        y0: i32,
+        y1: i32,
+        points: u64,
     },
 }
 
@@ -261,17 +280,73 @@ impl Game {
                 kind,
                 superpos: false,
                 entangled: false,
+                tunnel: false,
             };
         }
         let lvl = self.level as f32;
         let p = (self.mode.superpos_base() + (lvl - 1.0) * 0.015).min(self.mode.superpos_cap());
         let superpos = gen_range(0.0f32, 1.0f32) < p;
         let entangled = !superpos && gen_range(0.0f32, 1.0f32) < self.mode.entangle_prob();
+        let tunnel = !superpos && !entangled && gen_range(0.0f32, 1.0f32) < self.mode.tunnel_prob();
         Spec {
             kind,
             superpos,
             entangled,
+            tunnel,
         }
+    }
+
+    /// Donde terminaria una pieza que esta apoyada en `y` si atraviesa bloques.
+    /// Busca hasta TUNNEL_DEPTH filas mas abajo un sitio libre y deja caer ahi.
+    pub fn tunnel_target(&self, kind: usize, rot: usize, x: i32, y: i32) -> Option<i32> {
+        for yy in (y + 2)..=(y + 1 + TUNNEL_DEPTH) {
+            if self.fits(kind, rot, x, yy) {
+                return Some(self.drop_y(kind, rot, x, yy));
+            }
+        }
+        None
+    }
+
+    /// Destino del tunel para la pieza activa (para dibujar la guia).
+    pub fn active_tunnel_target(&self) -> Option<(i32, i32)> {
+        let a = self.active?;
+        if !a.spec.tunnel || a.dx.is_some() {
+            return None;
+        }
+        let gy = self.drop_y(a.spec.kind, a.rot, a.x, a.y);
+        self.tunnel_target(a.spec.kind, a.rot, a.x, gy).map(|ty| (gy, ty))
+    }
+
+    /// Si la pieza TUNEL esta apoyada y hay un hueco debajo, la atraviesa.
+    fn try_tunnel(&mut self) -> bool {
+        let mut a = match self.active {
+            Some(a) => a,
+            None => return false,
+        };
+        if !a.spec.tunnel || a.dx.is_some() || !self.grounded(&a) {
+            return false;
+        }
+        if let Some(ty) = self.tunnel_target(a.spec.kind, a.rot, a.x, a.y) {
+            let y0 = a.y;
+            a.y = ty;
+            a.spec.tunnel = false;
+            self.active = Some(a);
+            self.lowest_y = ty;
+            self.lock_t = 0.0;
+            self.lock_resets = 0;
+            let pts = 40 * (ty - y0) as u64 * self.level as u64;
+            self.score += pts;
+            self.events.push(Event::Tunnel {
+                kind: a.spec.kind,
+                rot: a.rot,
+                x: a.x,
+                y0,
+                y1: ty,
+                points: pts,
+            });
+            return true;
+        }
+        false
     }
 
     fn spawn(&mut self, spec: Spec) {
@@ -396,6 +471,8 @@ impl Game {
             }
             if a.dx.is_some() {
                 self.collapse(None);
+            } else {
+                self.try_tunnel();
             }
         }
         false
@@ -475,7 +552,7 @@ impl Game {
                 count += 1;
             } else if a.dx.is_some() {
                 self.collapse(None);
-            } else {
+            } else if !self.try_tunnel() {
                 break;
             }
         }
@@ -524,6 +601,8 @@ impl Game {
             } else {
                 if cur.dx.is_some() {
                     self.collapse(None);
+                } else {
+                    self.try_tunnel();
                 }
                 self.gravity_t = 0.0;
                 break;

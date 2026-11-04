@@ -14,6 +14,7 @@ const MAGENTA: Color = Color::new(0.95, 0.25, 1.0, 1.0);
 const GOLD: Color = Color::new(1.0, 0.8, 0.2, 1.0);
 const GREEN: Color = Color::new(0.25, 1.0, 0.55, 1.0);
 const VIOLET: Color = Color::new(0.7, 0.5, 1.0, 1.0);
+const TUNNEL_C: Color = Color::new(0.3, 1.0, 0.85, 1.0);
 const MODES: [Mode; 3] = [Mode::Facil, Mode::Normal, Mode::Experto];
 
 fn window_conf() -> Conf {
@@ -216,26 +217,88 @@ fn glow_text_c(t: &str, cx: f32, y: f32, size: f32, c: Color) {
     );
 }
 
+/// Mezcla dos colores (k=0 -> a, k=1 -> b), conserva el alfa de `a`.
+fn mix(a: Color, b: Color, k: f32) -> Color {
+    Color::new(
+        a.r + (b.r - a.r) * k,
+        a.g + (b.g - a.g) * k,
+        a.b + (b.b - a.b) * k,
+        a.a,
+    )
+}
+
+fn shade(c: Color, k: f32, a: f32) -> Color {
+    Color::new(c.r * k, c.g * k, c.b * k, a)
+}
+
+fn quad(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, c: Color) {
+    draw_triangle(p0, p1, p2, c);
+    draw_triangle(p0, p2, p3, c);
+}
+
+/// Bloque con volumen: sombra proyectada, biseles iluminados desde arriba a la
+/// izquierda, cara con degradado y brillo especular.
 fn draw_block(x: f32, y: f32, s: f32, c: Color, a: f32) {
-    let g = s * 0.16;
-    draw_rectangle(x - g, y - g, s + 2.0 * g, s + 2.0 * g, alpha(c, 0.10 * a));
-    draw_rectangle(
-        x + 1.0,
-        y + 1.0,
-        s - 2.0,
-        s - 2.0,
-        Color::new(c.r * 0.3, c.g * 0.3, c.b * 0.3, a),
-    );
-    let i = s * 0.13;
-    draw_rectangle(x + i, y + i, s - 2.0 * i, s - 2.0 * i, alpha(c, 0.92 * a));
-    draw_rectangle(
-        x + i,
-        y + i,
-        s - 2.0 * i,
-        s * 0.17,
-        Color::new(1.0, 1.0, 1.0, 0.35 * a),
-    );
-    draw_rectangle_lines(x + 1.0, y + 1.0, s - 2.0, s - 2.0, (s * 0.05).max(1.0), alpha(c, a));
+    // Halo de luz suave
+    let g = s * 0.14;
+    draw_rectangle(x - g, y - g, s + 2.0 * g, s + 2.0 * g, alpha(c, 0.07 * a));
+    // Sombra proyectada (abajo a la derecha)
+    let so = s * 0.12;
+    draw_rectangle(x + so, y + so, s, s, Color::new(0.0, 0.0, 0.02, 0.35 * a));
+
+    let b = (s * 0.17).max(1.5);
+    let (x0, y0, x1, y1) = (x, y, x + s, y + s);
+    let (ix0, iy0, ix1, iy1) = (x + b, y + b, x + s - b, y + s - b);
+    let white = Color::new(1.0, 1.0, 1.0, a);
+    // Biseles: arriba (mas claro), izquierda, derecha, abajo (mas oscuro)
+    quad(vec2(x0, y0), vec2(x1, y0), vec2(ix1, iy0), vec2(ix0, iy0), alpha(mix(c, white, 0.55), a));
+    quad(vec2(x0, y0), vec2(ix0, iy0), vec2(ix0, iy1), vec2(x0, y1), alpha(mix(c, white, 0.25), a));
+    quad(vec2(x1, y0), vec2(x1, y1), vec2(ix1, iy1), vec2(ix1, iy0), shade(c, 0.55, a));
+    quad(vec2(x0, y1), vec2(ix0, iy1), vec2(ix1, iy1), vec2(x1, y1), shade(c, 0.35, a));
+    // Cara con degradado vertical
+    let fw = ix1 - ix0;
+    let fh = iy1 - iy0;
+    let bands = 4;
+    for k in 0..bands {
+        let f = k as f32 / (bands - 1) as f32;
+        let col = mix(mix(c, white, 0.18), shade(c, 0.8, 1.0), f);
+        draw_rectangle(ix0, iy0 + fh * k as f32 / bands as f32, fw, fh / bands as f32 + 0.5, alpha(col, a));
+    }
+    // Brillo especular
+    draw_rectangle(ix0 + fw * 0.08, iy0 + fh * 0.1, fw * 0.45, fh * 0.14, Color::new(1.0, 1.0, 1.0, 0.45 * a));
+    draw_circle(ix0 + fw * 0.2, iy0 + fh * 0.42, (s * 0.05).max(0.8), Color::new(1.0, 1.0, 1.0, 0.35 * a));
+    // Contorno fino
+    draw_rectangle_lines(x0, y0, s, s, (s * 0.04).max(1.0), Color::new(0.0, 0.0, 0.0, 0.45 * a));
+}
+
+/// Marca de pieza TUNEL: flecha hacia abajo con anillos que bajan.
+fn tunnel_mark(cx: f32, cy: f32, s: f32, t: f32) {
+    let p = (t * 4.0).fract();
+    for k in 0..2 {
+        let q = (p + k as f32 * 0.5).fract();
+        let yy = cy - s * 0.25 + q * s * 0.5;
+        let w = s * (0.32 - 0.12 * q);
+        draw_line(cx - w, yy - w * 0.5, cx, yy, (s * 0.07).max(1.0), Color::new(1.0, 1.0, 1.0, 0.85 * (1.0 - q)));
+        draw_line(cx, yy, cx + w, yy - w * 0.5, (s * 0.07).max(1.0), Color::new(1.0, 1.0, 1.0, 0.85 * (1.0 - q)));
+    }
+    draw_circle_lines(cx, cy, s * 0.36, (s * 0.04).max(1.0), alpha(TUNNEL_C, 0.7));
+}
+
+/// Texto extruido en 3D (capas oscuras desplazadas + cara brillante).
+fn text_3d_c(t: &str, cx: f32, y: f32, size: f32, c: Color) {
+    let depth = ((size * 0.07).max(2.0)) as i32;
+    for i in (1..=depth).rev() {
+        let k = i as f32 / depth as f32;
+        text_c(t, cx + i as f32, y + i as f32, size, shade(c, 0.45 - 0.3 * k, c.a));
+    }
+    for &(o, a) in [(size * 0.06, 0.10f32), (size * 0.03, 0.22)].iter() {
+        for &(dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o)].iter() {
+            text_c(t, cx + dx, y + dy, size, alpha(c, a * c.a));
+        }
+    }
+    text_c(t, cx, y, size, Color::new(0.85 + c.r * 0.15, 0.85 + c.g * 0.15, 0.85 + c.b * 0.15, c.a));
+    // Reflejo superior
+    text_c(t, cx - 1.0, y - 1.0, size, Color::new(1.0, 1.0, 1.0, 0.25 * c.a));
 }
 
 fn ent_mark(cx: f32, cy: f32, s: f32, t: f32) {
@@ -262,27 +325,50 @@ fn wavy_line(a: Vec2, b: Vec2, amp: f32, t: f32, thick: f32, c: Color) {
     }
 }
 
+/// Panel hundido (vitrina): sombra interior arriba/izquierda, luz abajo/derecha.
 fn panel(r: Rect, c: Color) {
-    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.03, 0.04, 0.1, 0.8));
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.5, alpha(c, 0.45));
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.02, 0.03, 0.08, 0.85));
+    let d = (r.h.min(r.w) * 0.08).max(2.0);
+    for i in 0..3 {
+        let k = i as f32 / 3.0;
+        let a = 0.35 * (1.0 - k);
+        draw_rectangle(r.x, r.y + d * k, r.w, d / 3.0, Color::new(0.0, 0.0, 0.0, a));
+        draw_rectangle(r.x + d * k, r.y, d / 3.0, r.h, Color::new(0.0, 0.0, 0.0, a));
+    }
+    draw_line(r.x, r.y + r.h, r.x + r.w, r.y + r.h, 2.0, alpha(c, 0.55));
+    draw_line(r.x + r.w, r.y, r.x + r.w, r.y + r.h, 2.0, alpha(c, 0.35));
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, alpha(c, 0.3));
 }
 
+/// Boton con volumen: canto inferior (grosor), cara con degradado y brillo.
 fn button(r: Rect, label: &str, c: Color, enabled: bool, pulse: f32) {
-    let a = if enabled { 1.0 } else { 0.3 };
-    draw_rectangle(
-        r.x,
-        r.y,
-        r.w,
-        r.h,
-        Color::new(c.r * 0.14, c.g * 0.14, c.b * 0.2, 0.88),
-    );
-    if pulse > 0.0 {
-        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.18 * pulse));
+    let a = if enabled { 1.0 } else { 0.35 };
+    let depth = (r.h * 0.13).max(3.0);
+    // Sombra en el suelo y canto del boton
+    draw_rectangle(r.x + depth * 0.6, r.y + depth * 1.6, r.w, r.h, Color::new(0.0, 0.0, 0.0, 0.35 * a));
+    draw_rectangle(r.x, r.y + depth, r.w, r.h, shade(c, 0.28, 0.95 * a));
+    draw_rectangle_lines(r.x, r.y + depth, r.w, r.h, 1.5, shade(c, 0.5, 0.8 * a));
+    // Cara
+    let bands = 5;
+    for k in 0..bands {
+        let f = k as f32 / (bands - 1) as f32;
+        let col = mix(shade(c, 0.42, 1.0), shade(c, 0.16, 1.0), f);
+        draw_rectangle(r.x, r.y + r.h * k as f32 / bands as f32, r.w, r.h / bands as f32 + 0.5, alpha(col, 0.95 * a));
     }
-    draw_rectangle_lines(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0, 4.0, alpha(c, 0.15 * a));
+    if pulse > 0.0 {
+        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.2 * pulse));
+    }
+    // Brillo superior (vidrio)
+    draw_rectangle(r.x + 2.0, r.y + 2.0, r.w - 4.0, r.h * 0.32, Color::new(1.0, 1.0, 1.0, 0.10 * a));
+    draw_line(r.x + 2.0, r.y + 1.5, r.x + r.w - 2.0, r.y + 1.5, 2.0, alpha(mix(c, WHITE, 0.6), 0.8 * a));
+    draw_rectangle_lines(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + depth + 6.0, 3.0, alpha(c, 0.12 * a));
     draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, alpha(c, 0.9 * a));
-    let size = fit_size(label, r.h * 0.42, r.w * 0.86);
-    text_c(label, r.x + r.w / 2.0, r.y + r.h / 2.0 + size * 0.32, size, alpha(WHITE, a));
+    if !label.is_empty() {
+        let size = fit_size(label, r.h * 0.42, r.w * 0.86);
+        let ty = r.y + r.h / 2.0 + size * 0.32;
+        text_c(label, r.x + r.w / 2.0 + 1.5, ty + 1.5, size, Color::new(0.0, 0.0, 0.0, 0.6 * a));
+        text_c(label, r.x + r.w / 2.0, ty, size, alpha(WHITE, a));
+    }
 }
 
 fn hash(i: u32) -> f32 {
@@ -362,6 +448,11 @@ fn draw_mini(spec: &Spec, r: Rect, ms: f32, t: f32) {
     if spec.entangled {
         for &(x, y) in cells.iter() {
             ent_mark(ox + (x as f32 + 0.5) * ms, oy + (y as f32 + 0.5) * ms, ms, t);
+        }
+    }
+    if spec.tunnel {
+        for &(x, y) in cells.iter() {
+            tunnel_mark(ox + (x as f32 + 0.5) * ms, oy + (y as f32 + 0.5) * ms, ms, t);
         }
     }
 }
@@ -896,6 +987,30 @@ impl App {
                     self.fades.push(Fade { cells: fc, c, t: 0.0 });
                     self.sfx.play(S::Collapse, 0.55);
                 }
+                Event::Tunnel { kind, rot, x, y0, y1, points } => {
+                    let c = pieces::color(kind);
+                    let cells = pieces::cells(kind, rot);
+                    // Silueta fantasma donde estaba + estela que atraviesa los bloques.
+                    let mut fc = Vec::new();
+                    for &(cx, cy) in cells.iter() {
+                        fc.push((x + cx, y0 + cy));
+                    }
+                    self.fades.push(Fade { cells: fc, c: TUNNEL_C, t: 0.0 });
+                    for yy in y0..=y1 {
+                        for &(cx, cy) in cells.iter() {
+                            let p = App::cell_center(l, x + cx, yy + cy);
+                            self.burst(p, TUNNEL_C, 2, s * 2.5, s * 0.12);
+                        }
+                    }
+                    for &(cx, cy) in cells.iter() {
+                        let p = App::cell_center(l, x + cx, y1 + cy);
+                        self.burst(p, c, 6, s * 5.0, s * 0.16);
+                        self.burst(p, WHITE, 2, s * 3.0, s * 0.1);
+                    }
+                    self.shake = self.shake.max(s * 0.2);
+                    self.popup(l, &format!("TUNEL +{}", points), TUNNEL_C, false);
+                    self.sfx.play(S::Tunnel, 0.6);
+                }
                 Event::GameOver => {
                     if self.game.score > self.best {
                         self.best = self.game.score;
@@ -985,7 +1100,7 @@ impl App {
         let ts = fit_size("CUANTRIS", w * 0.2, w * 0.86);
         let ty = h * 0.17;
         let wob = (self.time * 2.0).sin() * ts * 0.02;
-        glow_text_c("CUANTRIS", w / 2.0, ty + wob, ts, CYAN);
+        text_3d_c("CUANTRIS", w / 2.0, ty + wob, ts, CYAN);
         let ss = fit_size("BLOQUES CUANTICOS", ts * 0.32, w * 0.8);
         text_c("BLOQUES CUANTICOS", w / 2.0, ty + ts * 0.5, ss, alpha(MAGENTA, 0.9));
         wavy_line(
@@ -1006,10 +1121,15 @@ impl App {
         for (i, r) in rs.iter().enumerate() {
             let (name, desc, c) = info[i];
             let pulse = ((self.time * 2.0 + i as f32).sin() * 0.5 + 0.5) * 0.5;
-            button(Rect::new(r.x, r.y, r.w, r.h * 0.62), "", c, true, pulse);
-            draw_rectangle(r.x, r.y + r.h * 0.62, r.w, r.h * 0.38, Color::new(c.r * 0.08, c.g * 0.08, c.b * 0.12, 0.85));
-            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, alpha(c, 0.9));
-            let s1 = fit_size(name, r.h * 0.38, r.w * 0.8);
+            button(*r, "", c, true, pulse);
+            draw_rectangle(r.x + 2.0, r.y + r.h * 0.62, r.w - 4.0, r.h * 0.38 - 2.0, Color::new(c.r * 0.05, c.g * 0.05, c.b * 0.09, 0.75));
+            draw_line(r.x + 2.0, r.y + r.h * 0.62, r.x + r.w - 2.0, r.y + r.h * 0.62, 1.0, alpha(c, 0.5));
+            // Mini bloque 3D decorativo a cada lado del nombre
+            let bs = r.h * 0.3;
+            draw_block(r.x + r.h * 0.18, r.y + r.h * 0.16, bs, c, 1.0);
+            draw_block(r.x + r.w - r.h * 0.18 - bs, r.y + r.h * 0.16, bs, c, 1.0);
+            let s1 = fit_size(name, r.h * 0.38, r.w * 0.7);
+            text_c(name, r.x + r.w / 2.0 + 2.0, r.y + r.h * 0.31 + s1 * 0.32 + 2.0, s1, Color::new(0.0, 0.0, 0.0, 0.6));
             text_c(name, r.x + r.w / 2.0, r.y + r.h * 0.31 + s1 * 0.32, s1, WHITE);
             let s2 = fit_size(desc, r.h * 0.22, r.w * 0.9);
             text_c(desc, r.x + r.w / 2.0, r.y + r.h * 0.81 + s2 * 0.3, s2, alpha(c, 0.9));
@@ -1022,15 +1142,23 @@ impl App {
             "SUPERPOSICION: la pieza esta en 2 lugares",
             "y colapsa al azar al tocar fondo",
             "ENTRELAZADAS: se borran juntas a distancia",
+            "NUEVO! TUNEL: la pieza con flecha atraviesa",
+            "hasta 4 filas y rellena huecos tapados",
         ];
         let last = rs[2];
-        let mut y = last.y + last.h + h * 0.05;
+        let mut y = last.y + last.h + h * 0.045;
         let hs = help
             .iter()
-            .map(|t| fit_size(t, (w * 0.04).min(h * 0.024), w * 0.92))
+            .map(|t| fit_size(t, (w * 0.04).min(h * 0.021), w * 0.92))
             .fold(f32::MAX, f32::min);
         for (i, t) in help.iter().enumerate() {
-            let c = if i >= 3 { alpha(VIOLET, 0.95) } else { alpha(WHITE, 0.75) };
+            let c = if i >= 6 {
+                alpha(TUNNEL_C, 0.95)
+            } else if i >= 3 {
+                alpha(VIOLET, 0.95)
+            } else {
+                alpha(WHITE, 0.75)
+            };
             text_c(t, w / 2.0, y, hs, c);
             y += hs * 1.45;
         }
@@ -1043,7 +1171,7 @@ impl App {
     fn draw_game(&self, l: &Lay) {
         let w = screen_width();
         let ts = fit_size("CUANTRIS", l.top * 0.55, w * 0.5);
-        glow_text_c("CUANTRIS", w / 2.0, l.top * 0.7, ts, CYAN);
+        text_3d_c("CUANTRIS", w / 2.0, l.top * 0.7, ts, CYAN);
         let ms = fit_size(self.game.mode.name(), l.top * 0.28, w * 0.25);
         draw_text(self.game.mode.name(), w * 0.04, l.top * 0.62, ms, alpha(MAGENTA, 0.8));
         let off = vec2(
@@ -1070,7 +1198,24 @@ impl App {
         let bh = s * (H - HIDDEN) as f32;
         let t = self.time;
 
-        draw_rectangle(bx, by, bw, bh, Color::new(0.02, 0.03, 0.08, 0.85));
+        let pulse = (t * 1.5).sin() * 0.5 + 0.5;
+        // Marco en relieve alrededor del pozo
+        let fr = (s * 0.38).max(4.0);
+        let (ox0, oy0, ox1, oy1) = (bx - fr, by - fr, bx + bw + fr, by + bh + fr);
+        draw_rectangle(ox0 + fr * 0.6, oy0 + fr * 0.9, ox1 - ox0, oy1 - oy0, Color::new(0.0, 0.0, 0.0, 0.45));
+        let frame = Color::new(0.12, 0.2, 0.38, 1.0);
+        quad(vec2(ox0, oy0), vec2(ox1, oy0), vec2(bx + bw, by), vec2(bx, by), mix(frame, WHITE, 0.25));
+        quad(vec2(ox0, oy0), vec2(bx, by), vec2(bx, by + bh), vec2(ox0, oy1), mix(frame, WHITE, 0.1));
+        quad(vec2(ox1, oy0), vec2(ox1, oy1), vec2(bx + bw, by + bh), vec2(bx + bw, by), shade(frame, 0.6, 1.0));
+        quad(vec2(ox0, oy1), vec2(bx, by + bh), vec2(bx + bw, by + bh), vec2(ox1, oy1), shade(frame, 0.4, 1.0));
+        draw_rectangle_lines(ox0, oy0, ox1 - ox0, oy1 - oy0, 2.0, Color::new(0.3, 0.8, 1.0, 0.35 + 0.2 * pulse));
+        draw_line(ox0 + 2.0, oy0 + 1.5, ox1 - 2.0, oy0 + 1.5, 1.5, Color::new(0.7, 0.95, 1.0, 0.5));
+        // Fondo del pozo con degradado (mas oscuro arriba = profundidad)
+        let bands = 10;
+        for k in 0..bands {
+            let f = k as f32 / bands as f32;
+            draw_rectangle(bx, by + bh * f, bw, bh / bands as f32 + 0.5, Color::new(0.015 + 0.02 * f, 0.02 + 0.03 * f, 0.06 + 0.06 * f, 0.92));
+        }
         for x in 1..W {
             let xx = bx + x as f32 * s;
             draw_line(xx, by, xx, by + bh, 1.0, Color::new(0.3, 0.5, 1.0, 0.07));
@@ -1079,17 +1224,13 @@ impl App {
             let yy = by + y as f32 * s;
             draw_line(bx, yy, bx + bw, yy, 1.0, Color::new(0.3, 0.5, 1.0, 0.07));
         }
-        let pulse = (t * 1.5).sin() * 0.5 + 0.5;
+        // Sombra interior (el pozo esta hundido)
         for i in 0..4 {
-            let e = (i as f32 + 1.0) * 2.5;
-            draw_rectangle_lines(
-                bx - e,
-                by - e,
-                bw + 2.0 * e,
-                bh + 2.0 * e,
-                2.0,
-                Color::new(0.2, 0.7, 1.0, (0.3 + 0.15 * pulse) / (i as f32 + 1.0)),
-            );
+            let k = i as f32 / 4.0;
+            let d = s * 0.45;
+            let a = 0.4 * (1.0 - k);
+            draw_rectangle(bx, by + d * k, bw, d / 4.0, Color::new(0.0, 0.0, 0.0, a));
+            draw_rectangle(bx + d * k, by, d / 4.0, bh, Color::new(0.0, 0.0, 0.0, a * 0.8));
         }
 
         // Bloques fijos + enlaces de entrelazamiento
@@ -1149,20 +1290,50 @@ impl App {
             let cells = pieces::cells(a.spec.kind, a.rot);
             let xs = a.xs();
             let sup = a.dx.is_some();
+            let tun = g.active_tunnel_target();
             for &x in xs.iter() {
                 let gy = g.drop_y(a.spec.kind, a.rot, x, a.y);
+                let ga = if sup { 0.22 } else if tun.is_some() { 0.2 } else { 0.4 };
                 for &(cx, cy) in cells.iter() {
                     let yy = gy + cy;
                     if yy >= HIDDEN {
-                        draw_rectangle_lines(
-                            bx + (x + cx) as f32 * s + 3.0,
-                            by + (yy - HIDDEN) as f32 * s + 3.0,
-                            s - 6.0,
-                            s - 6.0,
-                            2.0,
-                            alpha(col, if sup { 0.22 } else { 0.4 }),
-                        );
+                        let gx = bx + (x + cx) as f32 * s;
+                        let gyp = by + (yy - HIDDEN) as f32 * s;
+                        draw_rectangle(gx + 2.0, gyp + 2.0, s - 4.0, s - 4.0, alpha(col, ga * 0.25));
+                        draw_rectangle_lines(gx + 3.0, gyp + 3.0, s - 6.0, s - 6.0, 2.0, alpha(col, ga));
                     }
+                }
+            }
+            // Guia del TUNEL: donde reaparecera la pieza tras atravesar bloques
+            if let Some((gy, ty)) = tun {
+                let k = (t * 6.0).sin() * 0.5 + 0.5;
+                for &(cx, cy) in cells.iter() {
+                    let yy = ty + cy;
+                    if yy >= HIDDEN {
+                        let gx = bx + (a.x + cx) as f32 * s;
+                        let gyp = by + (yy - HIDDEN) as f32 * s;
+                        draw_rectangle(gx + 2.0, gyp + 2.0, s - 4.0, s - 4.0, alpha(TUNNEL_C, 0.18 + 0.12 * k));
+                        draw_rectangle_lines(gx + 2.0, gyp + 2.0, s - 4.0, s - 4.0, 2.5, alpha(TUNNEL_C, 0.7 + 0.3 * k));
+                    }
+                }
+                // Linea punteada que atraviesa los bloques
+                let mut minx = 9;
+                let mut maxx = -9;
+                for &(cx, _) in cells.iter() {
+                    minx = minx.min(cx);
+                    maxx = maxx.max(cx);
+                }
+                let lx = bx + (a.x as f32 + (minx + maxx + 1) as f32 / 2.0) * s;
+                let ly0 = by + ((gy + 2 - HIDDEN) as f32) * s;
+                let ly1 = by + ((ty + 1 - HIDDEN) as f32) * s;
+                let mut yy = ly0;
+                let dash = s * 0.3;
+                let off = (t * s * 3.0) % (dash * 2.0);
+                yy += off;
+                while yy < ly1 {
+                    let e = (yy + dash).min(ly1);
+                    draw_line(lx, yy, lx, e, 2.5, alpha(TUNNEL_C, 0.9));
+                    yy += dash * 2.0;
                 }
             }
             let mut centers = Vec::new();
@@ -1188,6 +1359,9 @@ impl App {
                         draw_block(px, py, s, col, al);
                         if a.spec.entangled {
                             ent_mark(px + s / 2.0, py + s / 2.0, s, t);
+                        }
+                        if a.spec.tunnel {
+                            tunnel_mark(px + s / 2.0, py + s / 2.0, s, t);
                         }
                     }
                 }
@@ -1259,7 +1433,7 @@ impl App {
         self.draw_overlay_bg();
         let (w, h) = (screen_width(), screen_height());
         let ts = fit_size("PAUSA", w * 0.16, w * 0.8);
-        glow_text_c("PAUSA", w / 2.0, h * 0.38, ts, CYAN);
+        text_3d_c("PAUSA", w / 2.0, h * 0.38, ts, CYAN);
         let rs = overlay_rects(3);
         button(rs[0], "CONTINUAR", GREEN, true, 0.0);
         button(rs[1], "REINICIAR", GOLD, true, 0.0);
@@ -1270,7 +1444,7 @@ impl App {
         self.draw_overlay_bg();
         let (w, h) = (screen_width(), screen_height());
         let ts = fit_size("COLAPSO TOTAL", w * 0.13, w * 0.9);
-        glow_text_c("COLAPSO TOTAL", w / 2.0, h * 0.27, ts, MAGENTA);
+        text_3d_c("COLAPSO TOTAL", w / 2.0, h * 0.27, ts, MAGENTA);
         let sc = format!("{}", self.game.score);
         let ss = fit_size(&sc, w * 0.14, w * 0.85);
         glow_text_c(&sc, w / 2.0, h * 0.27 + ts * 1.3 + ss * 0.6, ss, GOLD);

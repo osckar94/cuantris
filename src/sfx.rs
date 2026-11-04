@@ -18,6 +18,7 @@ pub enum S {
     Level,
     Over,
     Click,
+    Tunnel,
 }
 
 pub struct Sfx {
@@ -42,6 +43,7 @@ impl Sfx {
             snd_level(),
             snd_over(),
             snd_click(),
+            snd_tunnel(),
         ];
         let mut sounds = Vec::new();
         for d in defs.iter() {
@@ -287,6 +289,27 @@ fn snd_over() -> Vec<f32> {
 fn snd_click() -> Vec<f32> {
     let mut o = Vec::new();
     tone(&mut o, 0.0, 0.04, 950.0, 900.0, Wave::Sine, 0.4, 0.002, 40.0);
+    o
+}
+
+/// Efecto tunel: barrido descendente con vibrato y "pop" al reaparecer.
+fn snd_tunnel() -> Vec<f32> {
+    let n = (0.42 * SR) as usize;
+    let mut o = vec![0.0; n];
+    let mut ph = 0.0f32;
+    let mut ph2 = 0.0f32;
+    for (i, s) in o.iter_mut().enumerate() {
+        let t = i as f32 / SR;
+        let k = i as f32 / n as f32;
+        let f = 1500.0 * (1.0 - k).powf(1.6) + 120.0 + 90.0 * (t * 70.0).sin();
+        ph += f / SR;
+        ph -= ph.floor();
+        ph2 += f * 1.5 / SR;
+        ph2 -= ph2.floor();
+        let env = (t / 0.01).min(1.0) * ((1.0 - k) * 20.0).min(1.0) * (1.0 - k * 0.6);
+        *s = ((ph * TAU).sin() * 0.45 + (1.0 - 4.0 * (ph2 - 0.5).abs()) * 0.18) * env;
+    }
+    tone(&mut o, 0.3, 0.12, 620.0, 980.0, Wave::Tri, 0.35, 0.003, 18.0);
     o
 }
 
