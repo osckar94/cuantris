@@ -595,6 +595,10 @@ impl App {
             Goal::ClearAll => self.game.board_empty(),
             Goal::Lines(n) => self.game.lines >= n,
         };
+        if done || self.game.out_of_pieces || self.game.over {
+            // Los avisos flotantes taparian la ventana de resultado.
+            self.popups.clear();
+        }
         if done {
             self.solved[i] = true;
             self.sfx.play(S::Tetra, 0.7);
@@ -1326,8 +1330,8 @@ impl App {
                 }
             }
         }
-        let ts = fit_size("CUANTRIS", w * 0.2, w * 0.86);
-        let ty = h * 0.17;
+        let ts = fit_size("CUANTRIS", (w * 0.2).min(h * 0.11), w * 0.86);
+        let ty = h * 0.15;
         let wob = (self.time * 2.0).sin() * ts * 0.02;
         text_3d_c("CUANTRIS", w / 2.0, ty + wob, ts, CYAN);
         let ss = fit_size("BLOQUES CUANTICOS", ts * 0.32, w * 0.8);
