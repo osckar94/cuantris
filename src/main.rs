@@ -1,8 +1,10 @@
 mod game;
+mod lateral;
 mod pieces;
 mod puzzles;
 mod sfx;
 
+use lateral::{Challenge, Stats, Tech};
 use puzzles::{Goal, PUZZLES};
 
 use game::{Event, Game, Mode, Spec, H, HIDDEN, W};
@@ -202,6 +204,18 @@ fn puzzle_rects() -> (Vec<Rect>, Rect) {
     let bw = area * 0.6;
     let back = Rect::new((w - bw) / 2.0, by, bw, (h * 0.065).min(bw * 0.25));
     (v, back)
+}
+
+/// Botones de fin de partida (mas arriba, para dejar sitio al resumen lateral).
+fn over_rects() -> Vec<Rect> {
+    let (w, h) = (screen_width(), screen_height());
+    let bw = (w * 0.66).min(h * 0.45);
+    let bh = (h * 0.065).min(bw * 0.2);
+    let x = (w - bw) / 2.0;
+    let y0 = h * 0.34;
+    (0..2)
+        .map(|i| Rect::new(x, y0 + i as f32 * bh * 1.3, bw, bh))
+        .collect()
 }
 
 fn overlay_rects(n: usize) -> Vec<Rect> {
@@ -518,6 +532,15 @@ struct App {
     puzzle: Option<usize>,
     solved: Vec<bool>,
     show_hint: bool,
+    // Entrenamiento lateral en cada partida
+    challenge: Option<Challenge>,
+    next_ch: u32,
+    last_tech: Option<Tech>,
+    game_stats: Stats,
+    session_stats: Stats,
+    ent_flag: bool,
+    /// Ultimo resultado de reto para mostrar la leccion unos segundos.
+    last_result: Option<(Tech, bool, f32)>,
 }
 
 impl App {
@@ -557,6 +580,98 @@ impl App {
             puzzle: None,
             solved: vec![false; PUZZLES.len()],
             show_hint: false,
+            challenge: None,
+            next_ch: 5,
+            last_tech: None,
+            game_stats: Stats::default(),
+            session_stats: Stats::default(),
+            ent_flag: false,
+            last_result: None,
+        }
+    }
+
+    /// Lanza un reto lateral y prepara las piezas para que sea posible.
+    fn start_challenge(&mut self, l: &Lay) {
+        let tech = lateral::pick(&self.session_stats, self.last_tech);
+        self.last_tech = Some(tech);
+        // (posicion en la cola, 0 = tunel / 1 = entrelazada / 2 = superposicion)
+        let marks: &[(usize, u8)] = match tech {
+            Tech::Supuesto => &[(1, 0), (3, 0)],
+            Tech::Invertir => &[(0, 1), (1, 1)],
+            Tech::Mirar => &[(0, 2)],
+            Tech::Orden | Tech::Inesperado => &[],
+        };
+        for &(i, f) in marks.iter() {
+            if let Some(s) = self.game.queue.get_mut(i) {
+                s.superpos = f == 2;
+                s.entangled = f == 1;
+                s.tunnel = f == 0;
+            }
+        }
+        if tech == Tech::Mirar && self.game.charges == 0 {
+            self.game.add_charge();
+        }
+        self.challenge = Some(Challenge {
+            tech,
+            left: tech.pieces(),
+            t: 0.0,
+        });
+        self.last_result = None;
+        self.popup(l, "RETO LATERAL!", GOLD, true);
+        self.sfx.play(S::Entangle, 0.6);
+    }
+
+    /// Revisa el reto activo tras colocar una pieza.
+    #[allow(clippy::too_many_arguments)]
+    fn on_placed(&mut self, l: &Lay, kind: usize, rot: usize, from_hold: bool, observed: bool, tunneled: bool, lines: usize) {
+        if self.puzzle.is_some() || self.state != State::Playing {
+            self.ent_flag = false;
+            return;
+        }
+        let ent = self.ent_flag;
+        self.ent_flag = false;
+        let ch = match self.challenge.as_mut() {
+            Some(c) => c,
+            None => {
+                self.next_ch = self.next_ch.saturating_sub(1);
+                if self.next_ch == 0 {
+                    self.start_challenge(l);
+                }
+                return;
+            }
+        };
+        let ok = match ch.tech {
+            Tech::Orden => from_hold && lines > 0,
+            Tech::Supuesto => tunneled,
+            Tech::Invertir => ent,
+            Tech::Mirar => observed && lines > 0,
+            Tech::Inesperado => rot == 2 && (kind == 2 || kind == 5 || kind == 6) && lines > 0,
+        };
+        ch.left = ch.left.saturating_sub(1);
+        let tech = ch.tech;
+        let left = ch.left;
+        if ok {
+            self.game_stats.add(tech, true);
+            self.session_stats.add(tech, true);
+            let bonus = 500 * self.game.level as u64;
+            self.game.score += bonus;
+            self.game.add_charge();
+            self.popup(l, &format!("PENSASTE DE LADO! +{}", bonus), GREEN, true);
+            self.sfx.play(S::Level, 0.6);
+            for k in 0..20 {
+                let p = vec2(l.bx + l.cell * (k % 10) as f32 + l.cell * 0.5, l.by + l.cell * 2.0);
+                self.burst(p, GOLD, 5, l.cell * 7.0, l.cell * 0.18);
+            }
+            self.challenge = None;
+            self.last_result = Some((tech, true, 0.0));
+            self.next_ch = 7 + game::rand_int(4) as u32;
+        } else if left == 0 {
+            self.game_stats.add(tech, false);
+            self.session_stats.add(tech, false);
+            self.popup(l, "RETO NO SUPERADO", MAGENTA, false);
+            self.challenge = None;
+            self.last_result = Some((tech, false, 0.0));
+            self.next_ch = 6 + game::rand_int(3) as u32;
         }
     }
 
@@ -622,6 +737,11 @@ impl App {
 
     fn start(&mut self, mode: Mode) {
         self.puzzle = None;
+        self.challenge = None;
+        self.next_ch = 5;
+        self.game_stats = Stats::default();
+        self.last_result = None;
+        self.ent_flag = false;
         self.mode = mode;
         self.game = Game::new(mode);
         self.particles.clear();
@@ -922,6 +1042,15 @@ impl App {
         self.game.update(dt, soft);
         self.process_events(l);
         self.check_puzzle();
+        if let Some(c) = self.challenge.as_mut() {
+            c.t += dt;
+        }
+        if let Some(r) = self.last_result.as_mut() {
+            r.2 += dt;
+            if r.2 > 7.0 {
+                self.last_result = None;
+            }
+        }
     }
 
     fn update_puzzles(&mut self, ptrs: &[Ptr], l: &Lay) {
@@ -1072,7 +1201,7 @@ impl App {
     }
 
     fn update_over(&mut self, ptrs: &[Ptr], l: &Lay) {
-        let rs = overlay_rects(2);
+        let rs = over_rects();
         for p in ptrs {
             if let Ptr::Down(_, pos) = *p {
                 if self.sound_hit(pos, l) {
@@ -1184,7 +1313,11 @@ impl App {
                         self.sfx.play(S::Clear, 0.6);
                     }
                 }
+                Event::Placed { kind, rot, from_hold, observed, tunneled, lines } => {
+                    self.on_placed(l, kind, rot, from_hold, observed, tunneled, lines);
+                }
                 Event::Entangled { cells } => {
+                    self.ent_flag = true;
                     let mut fc = Vec::new();
                     for (x, y, k) in cells.iter() {
                         let p = App::cell_center(l, *x, *y);
@@ -1376,8 +1509,8 @@ impl App {
             "SUPERPOSICION: la pieza esta en 2 lugares",
             "y colapsa al azar al tocar fondo",
             "ENTRELAZADAS: se borran juntas a distancia",
-            "NUEVO! TUNEL: la pieza con flecha atraviesa",
-            "hasta 4 filas y rellena huecos tapados",
+            "TUNEL: la pieza con flecha atraviesa bloques",
+            "NUEVO! Retos laterales en cada partida",
         ];
         let last = rs[3];
         let mut y = last.y + last.h + h * 0.045;
@@ -1386,7 +1519,9 @@ impl App {
             .map(|t| fit_size(t, (w * 0.04).min(h * 0.021), w * 0.92))
             .fold(f32::MAX, f32::min);
         for (i, t) in help.iter().enumerate() {
-            let c = if i >= 6 {
+            let c = if i == 7 {
+                alpha(GOLD, 0.95)
+            } else if i >= 6 {
                 alpha(TUNNEL_C, 0.95)
             } else if i >= 3 {
                 alpha(VIOLET, 0.95)
@@ -1396,9 +1531,17 @@ impl App {
             text_c(t, w / 2.0, y, hs, c);
             y += hs * 1.45;
         }
-        if self.best > 0 {
-            let t = format!("RECORD: {}", self.best);
-            text_c(&t, w / 2.0, (y + hs).min(h * 0.98), hs * 1.1, GOLD);
+        let (ok, tried) = self.session_stats.total();
+        if self.best > 0 || tried > 0 {
+            let t = format!(
+                "RECORD: {}    INDICE LATERAL: {}  ({}/{} retos)",
+                self.best,
+                self.session_stats.index(),
+                ok,
+                tried
+            );
+            let ts2 = fit_size(&t, hs * 1.05, w * 0.94);
+            text_c(&t, w / 2.0, (y + hs).min(h * 0.98), ts2, GOLD);
         }
     }
 
@@ -1432,6 +1575,7 @@ impl App {
             text_3d_c("CUANTRIS", w / 2.0, l.top * 0.7, ts, CYAN);
             let ms = fit_size(self.game.mode.name(), l.top * 0.28, w * 0.25);
             draw_text(self.game.mode.name(), w * 0.04, l.top * 0.62, ms, alpha(MAGENTA, 0.8));
+            self.draw_lateral_banner(l);
         }
         let off = vec2(
             (self.time * 91.0).sin() * self.shake,
@@ -1709,6 +1853,89 @@ impl App {
         draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.05, 0.7));
     }
 
+    /// Aviso del reto lateral entre el titulo y el tablero.
+    fn draw_lateral_banner(&self, l: &Lay) {
+        let w = screen_width();
+        let fr = (l.cell * 0.3).max(4.0);
+        let space = (l.by - fr - l.top).max(l.cell * 1.2);
+        let gs = (space / 3.5).min(l.cell * 0.62);
+        let base = l.by - fr - 6.0;
+        if let Some(c) = &self.challenge {
+            let pulse = (self.time * 5.0).sin() * 0.5 + 0.5;
+            // Marco dorado alrededor del tablero mientras hay reto
+            let bw = l.cell * W as f32;
+            let bh = l.cell * (H - HIDDEN) as f32;
+            draw_rectangle_lines(l.bx - fr - 3.0, l.by - fr - 3.0, bw + 2.0 * fr + 6.0, bh + 2.0 * fr + 6.0, 3.0, alpha(GOLD, 0.35 + 0.45 * pulse));
+            let t1 = format!("RETO LATERAL: {}  ({} piezas)", c.tech.name(), c.left);
+            let s1 = fit_size(&t1, gs, w * 0.95);
+            text_c(&t1, w / 2.0 + 1.0, base - gs * 2.3 + 1.0, s1, Color::new(0.0, 0.0, 0.0, 0.7));
+            text_c(&t1, w / 2.0, base - gs * 2.3, s1, GOLD);
+            let s2 = fit_size(c.tech.question(), gs * 0.95, w * 0.95);
+            text_c(c.tech.question(), w / 2.0, base - gs * 1.15, s2, TUNNEL_C);
+            let s3 = fit_size(c.tech.goal(), gs * 0.85, w * 0.95);
+            text_c(c.tech.goal(), w / 2.0, base, s3, alpha(WHITE, 0.9));
+        } else if let Some((tech, ok, t)) = self.last_result {
+            let a = (1.0 - (t - 5.5).max(0.0) / 1.5).max(0.0);
+            let t1 = if ok {
+                format!("SUPERADO: {}", tech.name())
+            } else {
+                format!("NO SUPERADO: {}", tech.name())
+            };
+            let s1 = fit_size(&t1, gs, w * 0.95);
+            text_c(&t1, w / 2.0, base - gs * 1.2, s1, alpha(if ok { GREEN } else { MAGENTA }, a));
+            let s2 = fit_size(tech.lesson(), gs * 0.85, w * 0.95);
+            text_c(tech.lesson(), w / 2.0, base, s2, alpha(WHITE, 0.85 * a));
+        } else {
+            let t1 = format!("Proximo reto lateral en {} piezas", self.next_ch);
+            let s1 = fit_size(&t1, gs * 0.85, w * 0.9);
+            text_c(&t1, w / 2.0, base, s1, alpha(WHITE, 0.45));
+        }
+    }
+
+    /// Resumen del entrenamiento lateral (pantalla de fin de partida).
+    fn draw_training(&self, y0: f32) {
+        let (w, h) = (screen_width(), screen_height());
+        let pw = (w * 0.9).min(h * 0.55);
+        let px = (w - pw) / 2.0;
+        let ph = (h - y0 - h * 0.02).max(h * 0.2);
+        panel(Rect::new(px, y0, pw, ph), GOLD);
+        let ls = (ph / 10.5).min(w * 0.045);
+        let mut y = y0 + ls * 1.4;
+        let t = "ENTRENAMIENTO LATERAL";
+        text_c(t, w / 2.0, y, fit_size(t, ls * 1.1, pw * 0.9), GOLD);
+        y += ls * 1.5;
+        let (ok, tried) = self.game_stats.total();
+        let s = format!("Retos superados: {} de {}   Indice: {}", ok, tried, self.game_stats.index());
+        text_c(&s, w / 2.0, y, fit_size(&s, ls * 0.9, pw * 0.92), WHITE);
+        y += ls * 0.6;
+        for tech in lateral::ALL.iter() {
+            y += ls * 1.25;
+            let e = self.game_stats.s[tech.idx()];
+            draw_text(tech.short(), px + pw * 0.05, y, ls * 0.85, alpha(WHITE, 0.8));
+            let bx = px + pw * 0.42;
+            let bw = pw * 0.4;
+            draw_rectangle(bx, y - ls * 0.65, bw, ls * 0.6, Color::new(1.0, 1.0, 1.0, 0.08));
+            if e.tried > 0 {
+                let k = e.ok as f32 / e.tried as f32;
+                let col = if k >= 0.99 { GREEN } else if k > 0.0 { GOLD } else { MAGENTA };
+                draw_rectangle(bx, y - ls * 0.65, bw * k.max(0.04), ls * 0.6, col);
+            }
+            let v = format!("{}/{}", e.ok, e.tried);
+            draw_text(&v, bx + bw + pw * 0.03, y, ls * 0.85, alpha(WHITE, 0.8));
+        }
+        y += ls * 1.5;
+        if tried > 0 {
+            let weak = self.game_stats.weakest();
+            let p = format!("Practica: {}", weak.name());
+            text_c(&p, w / 2.0, y, fit_size(&p, ls * 0.9, pw * 0.92), TUNNEL_C);
+            y += ls * 1.2;
+            text_c(weak.lesson(), w / 2.0, y, fit_size(weak.lesson(), ls * 0.8, pw * 0.94), alpha(WHITE, 0.75));
+        } else {
+            let p = "Juega mas piezas: cada 5-10 aparece un reto";
+            text_c(p, w / 2.0, y, fit_size(p, ls * 0.85, pw * 0.92), alpha(WHITE, 0.7));
+        }
+    }
+
     fn draw_puzzles(&self) {
         let (w, h) = (screen_width(), screen_height());
         let ts = fit_size("ACERTIJOS", w * 0.15, w * 0.86);
@@ -1805,21 +2032,23 @@ impl App {
     fn draw_over(&self) {
         self.draw_overlay_bg();
         let (w, h) = (screen_width(), screen_height());
-        let ts = fit_size("COLAPSO TOTAL", w * 0.13, w * 0.9);
-        text_3d_c("COLAPSO TOTAL", w / 2.0, h * 0.27, ts, MAGENTA);
+        let ts = fit_size("COLAPSO TOTAL", (w * 0.11).min(h * 0.06), w * 0.9);
+        let ty = h * 0.1;
+        text_3d_c("COLAPSO TOTAL", w / 2.0, ty, ts, MAGENTA);
         let sc = format!("{}", self.game.score);
-        let ss = fit_size(&sc, w * 0.14, w * 0.85);
-        glow_text_c(&sc, w / 2.0, h * 0.27 + ts * 1.3 + ss * 0.6, ss, GOLD);
-        let info = format!("NIVEL {}   LINEAS {}", self.game.level, self.game.lines);
-        let is = fit_size(&info, w * 0.05, w * 0.85);
-        text_c(&info, w / 2.0, h * 0.27 + ts * 1.3 + ss * 1.25, is, alpha(WHITE, 0.8));
+        let ss = fit_size(&sc, (w * 0.11).min(h * 0.06), w * 0.85);
+        glow_text_c(&sc, w / 2.0, ty + ts * 0.6 + ss, ss, GOLD);
+        let mut info = format!("NIVEL {}   LINEAS {}", self.game.level, self.game.lines);
         if self.new_best {
-            let p = (self.time * 5.0).sin() * 0.5 + 0.5;
-            text_c("NUEVO RECORD!", w / 2.0, h * 0.27 + ts * 1.3 + ss * 1.25 + is * 1.6, is * 1.2, alpha(GREEN, 0.6 + 0.4 * p));
+            info.push_str("   NUEVO RECORD!");
         }
-        let rs = overlay_rects(2);
+        let is = fit_size(&info, w * 0.045, w * 0.9);
+        text_c(&info, w / 2.0, ty + ts * 0.6 + ss + is * 1.6, is, alpha(if self.new_best { GREEN } else { WHITE }, 0.85));
+        let rs = over_rects();
         button(rs[0], "REINTENTAR", GREEN, true, 0.0);
         button(rs[1], "MENU", MAGENTA, true, 0.0);
+        let last = rs[1];
+        self.draw_training(last.y + last.h * 1.45);
     }
 
     fn draw_fx(&self) {

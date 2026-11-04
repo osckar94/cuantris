@@ -163,6 +163,15 @@ pub enum Event {
         y1: i32,
         points: u64,
     },
+    /// Resumen de como se coloco una pieza (para los retos laterales).
+    Placed {
+        kind: usize,
+        rot: usize,
+        from_hold: bool,
+        observed: bool,
+        tunneled: bool,
+        lines: usize,
+    },
 }
 
 pub struct Game {
@@ -193,6 +202,9 @@ pub struct Game {
     pub puzzle: bool,
     /// En acertijo: ya no quedan piezas por jugar.
     pub out_of_pieces: bool,
+    cur_from_hold: bool,
+    cur_observed: bool,
+    cur_tunneled: bool,
 }
 
 impl Game {
@@ -223,6 +235,9 @@ impl Game {
             spawned: 0,
             puzzle: false,
             out_of_pieces: false,
+            cur_from_hold: false,
+            cur_observed: false,
+            cur_tunneled: false,
         };
         for i in 0..5 {
             let s = g.gen_spec(i < 2);
@@ -404,6 +419,7 @@ impl Game {
             self.lowest_y = ty;
             self.lock_t = 0.0;
             self.lock_resets = 0;
+            self.cur_tunneled = true;
             let pts = 40 * (ty - y0) as u64 * self.level as u64;
             self.score += pts;
             self.events.push(Event::Tunnel {
@@ -419,8 +435,22 @@ impl Game {
         false
     }
 
+    /// Mete piezas al frente de la cola (despues de la pieza actual).
+    pub fn inject(&mut self, specs: &[Spec]) {
+        for s in specs.iter().rev() {
+            self.queue.push_front(*s);
+        }
+    }
+
+    pub fn add_charge(&mut self) {
+        self.charges = (self.charges + 1).min(9);
+    }
+
     fn spawn(&mut self, spec: Spec) {
         self.spawned += 1;
+        self.cur_from_hold = false;
+        self.cur_observed = false;
+        self.cur_tunneled = false;
         let mut a = Active {
             spec,
             rot: 0,
@@ -615,6 +645,7 @@ impl Game {
                     1
                 };
                 self.charges -= 1;
+                self.cur_observed = true;
                 self.collapse(Some(pick));
                 self.events.push(Event::Observe);
                 return true;
@@ -661,7 +692,10 @@ impl Game {
             spec.superpos = a.dx.is_some();
             self.hold_used = true;
             match self.hold.replace(spec) {
-                Some(h) => self.spawn(h),
+                Some(h) => {
+                    self.spawn(h);
+                    self.cur_from_hold = true;
+                }
                 None => self.spawn_next(),
             }
             self.events.push(Event::Hold);
@@ -754,7 +788,15 @@ impl Game {
         self.events.push(Event::Lock);
         self.hold_used = false;
         self.locks += 1;
-        self.clear_lines();
+        let lines = self.clear_lines();
+        self.events.push(Event::Placed {
+            kind: a.spec.kind,
+            rot: a.rot,
+            from_hold: self.cur_from_hold,
+            observed: self.cur_observed,
+            tunneled: self.cur_tunneled,
+            lines,
+        });
         if all_hidden {
             self.over = true;
             self.events.push(Event::GameOver);
@@ -768,14 +810,14 @@ impl Game {
         self.spawn_next();
     }
 
-    fn clear_lines(&mut self) {
+    fn clear_lines(&mut self) -> usize {
         let full: Vec<i32> = (0..H)
             .filter(|&y| (0..W).all(|x| self.grid[y as usize][x as usize].kind != 0))
             .collect();
         let n = full.len();
         if n == 0 {
             self.combo = -1;
-            return;
+            return 0;
         }
         let mut cells = Vec::new();
         let mut groups: Vec<u32> = Vec::new();
@@ -856,6 +898,7 @@ impl Game {
         if tetra {
             self.charges = (self.charges + 1).min(9);
         }
+        n
     }
 
     fn add_garbage(&mut self) {
