@@ -153,7 +153,8 @@ fn lay() -> Lay {
     let gap = cell * 0.9;
     let total = bw + gap + sw;
     let bx = ((w - total) / 2.0).floor();
-    let by = top + ((avail_h - cell * 20.0) / 2.0).max(0.0);
+    // El espacio libre se deja casi todo ARRIBA del tablero, para los avisos.
+    let by = top + ((avail_h - cell * 20.0) * 0.8).max(0.0);
     let area = total.max(w * 0.6).min(w);
     let ax = (w - area) / 2.0;
     let pad = area * 0.03;
@@ -461,6 +462,17 @@ fn draw_bg(t: f32) {
         let c = Color::new(0.02 + 0.03 * f, 0.01 + 0.02 * (1.0 - f), 0.07 + 0.07 * f, 1.0);
         draw_rectangle(0.0, h * f, w, h / n as f32 + 1.0, c);
     }
+    // Nebulosas suaves que se mueven despacio (profundidad)
+    let neb = [(0.2f32, 0.3f32, VIOLET), (0.8, 0.55, CYAN), (0.35, 0.85, MAGENTA)];
+    for (k, &(nx, ny, nc)) in neb.iter().enumerate() {
+        let cx = w * (nx + 0.06 * (t * 0.07 + k as f32 * 2.0).sin());
+        let cy = h * (ny + 0.04 * (t * 0.05 + k as f32).cos());
+        let r0 = w.max(h) * 0.32;
+        for j in 0..8 {
+            let f = 1.0 - j as f32 / 8.0;
+            draw_circle(cx, cy, r0 * f, alpha(nc, 0.012));
+        }
+    }
     for i in 0..90u32 {
         let fx = hash(i * 2);
         let fy = hash(i * 2 + 1);
@@ -569,6 +581,9 @@ struct App {
     last_result: Option<(Tech, bool, f32)>,
     /// Botones de la botonera mantenidos: (puntero, boton, tiempo)
     pad_held: Vec<(u64, usize, f32)>,
+    /// Explicacion de pieza especial (0 superposicion, 1 entrelazada, 2 tunel)
+    explain: Option<(u8, f32)>,
+    explained: [bool; 3],
     /// Tarjeta de explicacion del entrenamiento lateral al empezar
     intro: bool,
     intro_seen: [bool; 3],
@@ -620,6 +635,8 @@ impl App {
             ent_flag: false,
             last_result: None,
             pad_held: Vec::new(),
+            explain: None,
+            explained: [false; 3],
             intro: false,
             intro_seen: [false; 3],
             intro_t: 0.0,
@@ -1007,6 +1024,38 @@ impl App {
                     self.sfx.play(S::Click, 0.5);
                 }
                 return;
+            }
+        }
+        // Primera vez que aparece una pieza especial: explicar que es y como se usa
+        if let Some((k, t)) = self.explain.as_mut() {
+            *t += dt;
+            let _ = k;
+            if tap && *t > 0.4 {
+                self.explain = None;
+                self.block_input = true;
+                self.sfx.play(S::Click, 0.5);
+            }
+            return;
+        }
+        if let Some(a) = self.game.active {
+            let kind = if a.dx.is_some() {
+                Some(0u8)
+            } else if a.spec.entangled {
+                Some(1)
+            } else if a.spec.tunnel {
+                Some(2)
+            } else {
+                None
+            };
+            if let Some(k) = kind {
+                // En acertijos no se explica: descubrirlo es parte del reto.
+                if !self.explained[k as usize] && self.puzzle.is_none() {
+                    self.explained[k as usize] = true;
+                    self.explain = Some((k, 0.0));
+                    self.block_input = true;
+                    self.sfx.play(S::Entangle, 0.5);
+                    return;
+                }
             }
         }
         let cell = l.cell;
@@ -1614,9 +1663,11 @@ impl App {
                     self.draw_pzwin();
                 } else if self.state == State::PzFail {
                     self.draw_pzfail();
-                } else if self.state == State::Playing && self.puzzle.is_none() {
+                } else if self.state == State::Playing {
                     if self.intro {
                         self.draw_intro();
+                    } else if let Some((k, _)) = self.explain {
+                        self.draw_explain(k);
                     } else if let Some(c) = &self.challenge {
                         if c.announcing {
                             self.draw_announce();
@@ -1731,6 +1782,15 @@ impl App {
 
     fn draw_game(&self, l: &Lay) {
         let w = screen_width();
+        // Barra de cabecera de vidrio
+        let bands = 6;
+        for k in 0..bands {
+            let f = k as f32 / bands as f32;
+            draw_rectangle(0.0, l.top * f, w, l.top / bands as f32 + 0.5, Color::new(0.05 + 0.03 * f, 0.07 + 0.03 * f, 0.18 + 0.05 * f, 0.75));
+        }
+        draw_line(0.0, l.top, w, l.top, 2.0, alpha(CYAN, 0.45));
+        draw_line(0.0, l.top + 3.0, w, l.top + 3.0, 1.0, alpha(MAGENTA, 0.25));
+        draw_rectangle(0.0, 0.0, w, l.top * 0.3, Color::new(1.0, 1.0, 1.0, 0.04));
         if let Some(i) = self.puzzle {
             let p = &PUZZLES[i];
             let ts = fit_size(p.name, l.top * 0.5, w * 0.62);
@@ -1982,6 +2042,28 @@ impl App {
             if sup && centers.len() == 2 {
                 wavy_line(centers[0], centers[1], s * 0.5, t * 1.5, 2.0, alpha(col, 0.5));
             }
+            // Etiqueta que explica la pieza especial (en juego normal)
+            if self.puzzle.is_none() && !centers.is_empty() {
+                let (label, lc) = if sup {
+                    (if g.charges > 0 { "SUPERPOSICION: pulsa OBSERVAR" } else { "SUPERPOSICION: caera al azar" }, CYAN)
+                } else if a.spec.entangled {
+                    ("ENLAZADA: borra una y cae su gemela", VIOLET)
+                } else if a.spec.tunnel {
+                    ("TUNEL: atraviesa bloques", TUNNEL_C)
+                } else {
+                    ("", WHITE)
+                };
+                if !label.is_empty() {
+                    let mid = centers.iter().fold(Vec2::ZERO, |acc, c| acc + *c) / centers.len() as f32;
+                    let ls = fit_size(label, s * 0.5, s * 9.6);
+                    let lw = measure_text(label, None, ls as u16, 1.0).width;
+                    let ly = (mid.y + s * 2.2).max(by + s * 2.6);
+                    let lx = (mid.x).clamp(bx + lw / 2.0 + 4.0, bx + s * W as f32 - lw / 2.0 - 4.0);
+                    draw_rectangle(lx - lw / 2.0 - 5.0, ly - ls * 0.95, lw + 10.0, ls * 1.3, Color::new(0.0, 0.0, 0.05, 0.75));
+                    draw_rectangle_lines(lx - lw / 2.0 - 5.0, ly - ls * 0.95, lw + 10.0, ls * 1.3, 1.5, alpha(lc, 0.8));
+                    text_c(label, lx, ly, ls, lc);
+                }
+            }
         }
     }
 
@@ -2000,6 +2082,22 @@ impl App {
             let r = Rect::new(x, y, sw, bh);
             panel(r, CYAN);
             draw_mini(spec, r, if i == 0 { s * 0.8 } else { s * 0.6 }, t);
+            // Etiqueta de pieza especial
+            let tag = if spec.superpos {
+                Some(("DOBLE", CYAN))
+            } else if spec.entangled {
+                Some(("ENLACE", VIOLET))
+            } else if spec.tunnel {
+                Some(("TUNEL", TUNNEL_C))
+            } else {
+                None
+            };
+            if let Some((tg, tc)) = tag {
+                let ts = fit_size(tg, s * 0.42, sw * 0.6);
+                let tw = measure_text(tg, None, ts as u16, 1.0).width;
+                draw_rectangle(r.x + r.w - tw - 6.0, r.y + 2.0, tw + 4.0, ts * 1.05, alpha(tc, 0.85));
+                draw_text(tg, r.x + r.w - tw - 4.0, r.y + ts * 0.85 + 2.0, ts, Color::new(0.02, 0.02, 0.08, 1.0));
+            }
             y += bh + s * 0.25;
         }
         y += s * 0.2;
@@ -2117,6 +2215,118 @@ impl App {
         let p = (self.time * 3.0).sin() * 0.5 + 0.5;
         let t = "TOCA PARA JUGAR";
         text_c(t, cx, py + ph - ls * 1.3, fit_size(t, ls * 1.3, pw * 0.8), alpha(GREEN, 0.55 + 0.45 * p));
+    }
+
+    /// "Que es esto?": explica una pieza especial con un dibujo (el juego espera).
+    fn draw_explain(&self, k: u8) {
+        let (w, h) = (screen_width(), screen_height());
+        draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.05, 0.6));
+        let pw = (w * 0.92).min(h * 0.6);
+        let px = (w - pw) / 2.0;
+        let ph = h * 0.62;
+        let py = h * 0.16;
+        let (title, color, lines): (&str, Color, [&str; 6]) = match k {
+            0 => (
+                "SUPERPOSICION",
+                CYAN,
+                [
+                    "La ONDA une dos copias de la misma pieza:",
+                    "esta en DOS lugares a la vez (50% / 50%).",
+                    "Si no haces nada, al tocar fondo se queda",
+                    "AL AZAR en una de las dos.",
+                    "COMO USARLA: pulsa OBSERVAR (gasta 1 carga).",
+                    "Se queda la copia mas honda y la mueves libre.",
+                ],
+            ),
+            1 => (
+                "ENTRELAZADA",
+                VIOLET,
+                [
+                    "El PUNTO blanco marca una pieza enlazada.",
+                    "La ONDA violeta une a las dos gemelas.",
+                    "Si borras una linea que toca a una,",
+                    "la otra DESAPARECE tambien, este donde este.",
+                    "COMO USARLA: no hay boton. Pon las gemelas",
+                    "donde te convenga borrar bloques lejos.",
+                ],
+            ),
+            _ => (
+                "TUNEL",
+                TUNNEL_C,
+                [
+                    "La FLECHA con anillos marca una pieza tunel.",
+                    "Al tocar fondo ATRAVIESA hasta 4 filas",
+                    "de bloques y cae en el hueco de abajo.",
+                    "La guia verde punteada muestra donde caera.",
+                    "COMO USARLA: se activa sola. Ponla encima",
+                    "de un hueco tapado y sueltala.",
+                ],
+            ),
+        };
+        panel(Rect::new(px, py, pw, ph), color);
+        let ls = (ph / 17.0).min(w * 0.046);
+        let cx = w / 2.0;
+        let mut y = py + ls * 1.8;
+        let t = "QUE ES ESTO?";
+        text_c(t, cx, y, fit_size(t, ls * 1.0, pw * 0.9), alpha(WHITE, 0.7));
+        y += ls * 1.9;
+        text_3d_c(title, cx, y, fit_size(title, ls * 1.9, pw * 0.9), color);
+        y += ls * 1.0;
+        // Dibujo de ejemplo
+        let s = ls * 1.3;
+        let t0 = self.time;
+        let ty = y + s * 0.4;
+        let tcol = pieces::color(2);
+        let tcells = pieces::cells(2, 0);
+        match k {
+            0 => {
+                let mut cs = Vec::new();
+                for (i, off) in [-s * 2.6, s * 1.0].iter().enumerate() {
+                    let al = 0.55 + 0.25 * (t0 * 10.0 + i as f32 * PI).sin();
+                    let mut sum = Vec2::ZERO;
+                    for &(x, yy) in tcells.iter() {
+                        let p = vec2(cx + off + x as f32 * s, ty + yy as f32 * s);
+                        draw_block(p.x, p.y, s, tcol, al);
+                        sum += p + vec2(s / 2.0, s / 2.0);
+                    }
+                    cs.push(sum / 4.0);
+                    text_c("50%", cs[i].x, ty - s * 0.2, s * 0.6, WHITE);
+                }
+                wavy_line(cs[0], cs[1], s * 0.5, t0 * 1.5, 2.5, alpha(tcol, 0.8));
+            }
+            1 => {
+                let a = vec2(cx - s * 2.5, ty + s * 0.5);
+                let b = vec2(cx + s * 2.5, ty + s * 1.2);
+                for p in [a, b].iter() {
+                    draw_block(p.x - s / 2.0, p.y - s / 2.0, s, pieces::color(5), 1.0);
+                    ent_mark(p.x, p.y, s, t0);
+                }
+                wavy_line(a, b, s * 0.35, t0, 2.5, Color::new(0.85, 0.6, 1.0, 0.8));
+            }
+            _ => {
+                let bx = cx - s * 1.5;
+                for &(x, yy) in tcells.iter() {
+                    let p = vec2(bx + x as f32 * s, ty + yy as f32 * s - s * 0.4);
+                    draw_block(p.x, p.y, s, tcol, 1.0);
+                    tunnel_mark(p.x + s / 2.0, p.y + s / 2.0, s, t0);
+                }
+                for x in 0..5 {
+                    draw_block(cx - s * 2.5 + x as f32 * s, ty + s * 1.8, s * 0.95, pieces::color(7), 0.9);
+                }
+            }
+        }
+        y = ty + s * 3.4;
+        for (i, line) in lines.iter().enumerate() {
+            let c = if i >= 4 { GREEN } else { WHITE };
+            text_c(line, cx, y, fit_size(line, ls * 0.95, pw * 0.94), c);
+            y += ls * 1.35;
+            if i == 3 {
+                y += ls * 0.4;
+            }
+        }
+        let p = (self.time * 3.0).sin() * 0.5 + 0.5;
+        let t = "TOCA PARA SEGUIR";
+        text_c(t, cx, py + ph - ls * 0.9, fit_size(t, ls * 1.1, pw * 0.8), alpha(GREEN, 0.55 + 0.45 * p));
     }
 
     /// Anuncio grande al empezar un reto (el juego espera un toque).

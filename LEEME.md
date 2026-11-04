@@ -1,6 +1,10 @@
 # CUANTRIS — bloques cuánticos para tu celular (Rust + macroquad)
 
 ## Cómo jugar
+- **¿Qué son las ondas?** Onda entre DOS copias de una pieza = SUPERPOSICIÓN (está en 2 sitios; pulsa
+  OBSERVAR para quedarte con la que cae más hondo). Onda violeta entre bloques con punto = ENTRELAZADAS
+  (borra una línea con una y desaparece su gemela). Flecha con anillos = TÚNEL (atraviesa bloques sola).
+  La primera vez que aparece cada una, el juego se detiene y lo explica con un dibujo.
 - **Botonera en pantalla (nuevo)**: ◀ ▶ mover (mantén para deslizar), ↺ ↻ girar, ▼ bajar (mantén),
   ⤓ caída total; debajo GUARDAR, OBSERVAR y PAUSA. En PAUSA → **BOTONES: SÍ/NO** para jugar solo con gestos.
 - **Deslizar a los lados**: mover la pieza.
