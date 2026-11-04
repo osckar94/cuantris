@@ -862,11 +862,16 @@ impl App {
         } else {
             let m = mouse_position();
             let p = vec2(m.0, m.1);
-            if is_mouse_button_pressed(MouseButton::Left) {
+            // Un clic rapido puede pulsar y soltar en el mismo fotograma:
+            // hay que entregar ambos o el gesto queda "colgado".
+            let pressed = is_mouse_button_pressed(MouseButton::Left);
+            let released = is_mouse_button_released(MouseButton::Left);
+            if pressed {
                 v.push(Ptr::Down(0, p));
-            } else if is_mouse_button_released(MouseButton::Left) {
+            }
+            if released {
                 v.push(Ptr::Up(0, p));
-            } else if is_mouse_button_down(MouseButton::Left) {
+            } else if !pressed && is_mouse_button_down(MouseButton::Left) {
                 v.push(Ptr::Move(0, p));
             }
         }
@@ -950,9 +955,9 @@ impl App {
         for p in ptrs {
             match *p {
                 Ptr::Down(id, pos) => {
-                    if self.gestures.contains_key(&id) {
-                        continue;
-                    }
+                    // Un gesto viejo con el mismo id quedo sin final: se descarta.
+                    self.gestures.remove(&id);
+                    self.pad_held.retain(|h| h.0 != id);
                     if self.sound_hit(pos, l) {
                         self.gestures.insert(id, Gesture::new(pos, now, true));
                         continue;
