@@ -1074,10 +1074,20 @@ impl App {
                         self.gestures.insert(id, Gesture::new(pos, now, true));
                         match i {
                             0 => {
-                                self.game.hold();
+                                if !self.game.hold() {
+                                    self.popup(l, "Ya guardaste esta pieza: suelta una primero", MAGENTA, false);
+                                }
                             }
                             1 => {
-                                self.game.observe();
+                                if !self.game.observe() {
+                                    let msg = if self.game.charges == 0 {
+                                        "Sin cargas de OBSERVAR: supera retos para ganar"
+                                    } else {
+                                        "OBSERVAR solo sirve con pieza DOBLE (2 copias con onda)"
+                                    };
+                                    self.popup(l, msg, GOLD, false);
+                                    self.sfx.play(S::Click, 0.3);
+                                }
                             }
                             _ => {
                                 self.sfx.play(S::Click, 0.5);
@@ -1834,6 +1844,19 @@ impl App {
         // En acertijo el boton no parpadea: descubrir que hay que observar es parte del reto.
         let pulse = if can_obs && !g.puzzle { (self.time * 7.0).sin() * 0.5 + 0.5 } else { 0.0 };
         button(l.buttons[1], &format!("OBSERVAR {}", g.charges), GOLD, can_obs, pulse);
+        // Explicar por que esta apagado
+        if !can_obs {
+            let r = l.buttons[1];
+            let cap = if g.charges == 0 { "sin cargas" } else { "solo con pieza doble" };
+            let cs = fit_size(cap, r.h * 0.2, r.w * 0.9);
+            text_c(cap, r.x + r.w / 2.0, r.y + r.h - cs * 0.35, cs, alpha(GOLD, 0.75));
+        }
+        if !can_hold && g.active.is_some() && g.hold_used {
+            let r = l.buttons[0];
+            let cap = "ya usado";
+            let cs = fit_size(cap, r.h * 0.2, r.w * 0.9);
+            text_c(cap, r.x + r.w / 2.0, r.y + r.h - cs * 0.35, cs, alpha(MAGENTA, 0.8));
+        }
         button(l.buttons[2], if g.puzzle { "OPCIONES" } else { "PAUSA" }, CYAN, true, 0.0);
         if let Some(pad) = l.pad {
             self.draw_pad(&pad);
