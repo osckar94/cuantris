@@ -1,6 +1,8 @@
 # CUANTRIS — bloques cuánticos para tu celular (Rust + macroquad)
 
 ## Cómo jugar
+- **Botonera en pantalla (nuevo)**: ◀ ▶ mover (mantén para deslizar), ↺ ↻ girar, ▼ bajar (mantén),
+  ⤓ caída total; debajo GUARDAR, OBSERVAR y PAUSA. En PAUSA → **BOTONES: SÍ/NO** para jugar solo con gestos.
 - **Deslizar a los lados**: mover la pieza.
 - **Tocar**: girar (mitad derecha = horario, mitad izquierda = antihorario).
 - **Deslizar rápido hacia abajo**: caída total. Arrastre lento: bajar poco a poco.

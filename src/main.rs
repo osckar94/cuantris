@@ -128,13 +128,23 @@ struct Lay {
     sw: f32,
     top: f32,
     buttons: [Rect; 3],
+    /// Botonera: izquierda, derecha, girar izq, girar der, bajar, caida total.
+    pad: Option<[Rect; 6]>,
     sound: Rect,
+}
+
+/// Mostrar botonera en pantalla (se cambia desde PAUSA).
+static PAD_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn pad_on() -> bool {
+    PAD_ON.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn lay() -> Lay {
     let (w, h) = (screen_width(), screen_height());
     let top = (h * 0.075).max(40.0);
-    let bot = (h * 0.1).max(56.0);
+    let with_pad = pad_on();
+    let bot = if with_pad { (h * 0.21).max(118.0) } else { (h * 0.1).max(56.0) };
     let avail_h = h - top - bot - h * 0.02;
     let cell = ((w * 0.95) / 15.1).min(avail_h / 20.0).floor().max(4.0);
     let bw = cell * 10.0;
@@ -147,8 +157,22 @@ fn lay() -> Lay {
     let area = total.max(w * 0.6).min(w);
     let ax = (w - area) / 2.0;
     let pad = area * 0.03;
-    let bh = bot * 0.72;
-    let byb = h - bot + (bot - bh) / 2.0 - h * 0.012;
+    let (bh, byb, padr) = if with_pad {
+        // Fila de control arriba, fila de acciones abajo
+        let ph = bot * 0.4;
+        let py = h - bot + bot * 0.04;
+        let gp = area * 0.02;
+        let pw = (area - gp * 7.0) / 6.0;
+        let mut r = [Rect::new(0.0, 0.0, 0.0, 0.0); 6];
+        for (i, rr) in r.iter_mut().enumerate() {
+            *rr = Rect::new(ax + gp + i as f32 * (pw + gp), py, pw, ph);
+        }
+        let bh = bot * 0.32;
+        (bh, py + ph + bot * 0.13, Some(r))
+    } else {
+        let bh = bot * 0.72;
+        (bh, h - bot + (bot - bh) / 2.0 - h * 0.012, None)
+    };
     let bwid = (area - pad * 4.0) / 3.0;
     let buttons = [
         Rect::new(ax + pad, byb, bwid, bh),
@@ -165,6 +189,7 @@ fn lay() -> Lay {
         sw,
         top,
         buttons,
+        pad: padr,
         sound,
     }
 }
@@ -223,7 +248,8 @@ fn overlay_rects(n: usize) -> Vec<Rect> {
     let bw = (w * 0.66).min(h * 0.45);
     let bh = (h * 0.075).min(bw * 0.22);
     let x = (w - bw) / 2.0;
-    let y0 = h * 0.5;
+    // Con muchos botones se sube la columna para que quepa
+    let y0 = (h * 0.5).min(h * 0.95 - n as f32 * bh * 1.3);
     (0..n)
         .map(|i| Rect::new(x, y0 + i as f32 * bh * 1.3, bw, bh))
         .collect()
@@ -541,6 +567,8 @@ struct App {
     ent_flag: bool,
     /// Ultimo resultado de reto para mostrar la leccion unos segundos.
     last_result: Option<(Tech, bool, f32)>,
+    /// Botones de la botonera mantenidos: (puntero, boton, tiempo)
+    pad_held: Vec<(u64, usize, f32)>,
 }
 
 impl App {
@@ -587,6 +615,7 @@ impl App {
             session_stats: Stats::default(),
             ent_flag: false,
             last_result: None,
+            pad_held: Vec::new(),
         }
     }
 
@@ -729,8 +758,38 @@ impl App {
         }
     }
 
+    fn toggle_pad(&mut self) {
+        let on = !pad_on();
+        PAD_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+        self.sfx.play(S::Click, 0.5);
+        self.pad_held.clear();
+    }
+
+    /// Accion inmediata de un boton de la botonera.
+    fn pad_press(&mut self, i: usize) {
+        match i {
+            0 => {
+                self.game.shift(-1);
+            }
+            1 => {
+                self.game.shift(1);
+            }
+            2 => {
+                self.game.rotate(false);
+            }
+            3 => {
+                self.game.rotate(true);
+            }
+            4 => {
+                self.game.soft_step();
+            }
+            _ => self.game.hard_drop(),
+        }
+    }
+
     fn set_state(&mut self, s: State) {
         self.state = s;
+        self.pad_held.clear();
         self.gestures.clear();
         self.block_input = true;
     }
@@ -915,6 +974,17 @@ impl App {
                         }
                         continue;
                     }
+                    // Botonera de control (un poco mas grande que el dibujo para dedos)
+                    if let Some(pad) = l.pad {
+                        if let Some(i) = pad.iter().position(|r| {
+                            Rect::new(r.x - 3.0, r.y - 6.0, r.w + 6.0, r.h + 12.0).contains(pos)
+                        }) {
+                            self.gestures.insert(id, Gesture::new(pos, now, true));
+                            self.pad_press(i);
+                            self.pad_held.push((id, i, 0.0));
+                            continue;
+                        }
+                    }
                     self.gestures.insert(id, Gesture::new(pos, now, false));
                 }
                 Ptr::Move(id, pos) => {
@@ -959,6 +1029,7 @@ impl App {
                     }
                 }
                 Ptr::Up(id, pos) => {
+                    self.pad_held.retain(|h| h.0 != id);
                     if let Some(g) = self.gestures.remove(&id) {
                         if g.button {
                             continue;
@@ -1038,7 +1109,36 @@ impl App {
         } else {
             self.das_dir = 0;
         }
-        let soft = is_key_down(KeyCode::Down);
+        // Botonera: soltar dedos perdidos y repetir movimiento al mantener
+        let touch = self.touch_mode;
+        let mouse_down = is_mouse_button_down(MouseButton::Left);
+        let alive: Vec<u64> = self.active.clone();
+        self.pad_held.retain(|h| if touch { alive.contains(&h.0) } else { mouse_down });
+        let mut pad_soft = false;
+        let mut shifts = 0i32;
+        for h in self.pad_held.iter_mut() {
+            let prev = h.2;
+            h.2 += dt;
+            match h.1 {
+                0 | 1 => {
+                    let (d, r) = (0.17f32, 0.05f32);
+                    if h.2 > d {
+                        let before = if prev > d { ((prev - d) / r).floor() as i32 } else { -1 };
+                        let after = ((h.2 - d) / r).floor() as i32;
+                        let n = after - before;
+                        shifts += if h.1 == 0 { -n } else { n };
+                    }
+                }
+                4 => pad_soft = true,
+                _ => {}
+            }
+        }
+        while shifts != 0 {
+            let dir = shifts.signum();
+            self.game.shift(dir);
+            shifts -= dir;
+        }
+        let soft = is_key_down(KeyCode::Down) || pad_soft;
         self.game.update(dt, soft);
         self.process_events(l);
         self.check_puzzle();
@@ -1138,7 +1238,15 @@ impl App {
 
     fn update_pause(&mut self, ptrs: &[Ptr], l: &Lay) {
         if let Some(i) = self.puzzle {
-            let rs = overlay_rects(4);
+            let rs = overlay_rects(5);
+            for p in ptrs {
+                if let Ptr::Down(_, pos) = *p {
+                    if rs[4].contains(pos) {
+                        self.toggle_pad();
+                        return;
+                    }
+                }
+            }
             for p in ptrs {
                 if let Ptr::Down(_, pos) = *p {
                     if self.sound_hit(pos, l) {
@@ -1172,7 +1280,7 @@ impl App {
             }
             return;
         }
-        let rs = overlay_rects(3);
+        let rs = overlay_rects(4);
         for p in ptrs {
             if let Ptr::Down(_, pos) = *p {
                 if self.sound_hit(pos, l) {
@@ -1189,6 +1297,10 @@ impl App {
                     return;
                 }
                 if rs[2].contains(pos) {
+                    self.toggle_pad();
+                    continue;
+                }
+                if rs[3].contains(pos) {
                     self.sfx.play(S::Click, 0.5);
                     self.set_state(State::Menu);
                     return;
@@ -1503,7 +1615,7 @@ impl App {
         }
 
         let help = [
-            "Desliza: mover    Toca: girar",
+            "Botones o gestos: desliza mover, toca girar",
             "Desliza rapido abajo: caida total",
             "Desliza arriba: guardar pieza",
             "SUPERPOSICION: la pieza esta en 2 lugares",
@@ -1591,6 +1703,9 @@ impl App {
         let pulse = if can_obs && !g.puzzle { (self.time * 7.0).sin() * 0.5 + 0.5 } else { 0.0 };
         button(l.buttons[1], &format!("OBSERVAR {}", g.charges), GOLD, can_obs, pulse);
         button(l.buttons[2], if g.puzzle { "OPCIONES" } else { "PAUSA" }, CYAN, true, 0.0);
+        if let Some(pad) = l.pad {
+            self.draw_pad(&pad);
+        }
     }
 
     fn draw_board(&self, l: &Lay, off: Vec2) {
@@ -1853,6 +1968,63 @@ impl App {
         draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.05, 0.7));
     }
 
+    /// Botonera de control con iconos dibujados (la fuente no trae flechas).
+    fn draw_pad(&self, pad: &[Rect; 6]) {
+        let cols = [CYAN, CYAN, VIOLET, VIOLET, GREEN, MAGENTA];
+        for (i, r) in pad.iter().enumerate() {
+            let held = self.pad_held.iter().any(|h| h.1 == i);
+            let c = cols[i];
+            // Al pulsar, el boton "se hunde": baja hasta su canto
+            let depth = (r.h * 0.13).max(3.0);
+            let rr = if held { Rect::new(r.x, r.y + depth * 0.8, r.w, r.h) } else { *r };
+            button(rr, "", c, true, if held { 1.0 } else { 0.0 });
+            let cx = rr.x + rr.w / 2.0;
+            let cy = rr.y + rr.h / 2.0;
+            let u = rr.w.min(rr.h) * 0.22;
+            let ic = Color::new(1.0, 1.0, 1.0, 0.95);
+            let sh = Color::new(0.0, 0.0, 0.0, 0.5);
+            let th = (u * 0.35).max(2.0);
+            for &(o, col) in [(1.5f32, sh), (0.0, ic)].iter() {
+                let (x, y) = (cx + o, cy + o);
+                match i {
+                    0 => draw_triangle(vec2(x - u * 1.2, y), vec2(x + u * 0.8, y - u * 1.1), vec2(x + u * 0.8, y + u * 1.1), col),
+                    1 => draw_triangle(vec2(x + u * 1.2, y), vec2(x - u * 0.8, y - u * 1.1), vec2(x - u * 0.8, y + u * 1.1), col),
+                    2 | 3 => {
+                        // Flecha circular: arco de 270 grados + punta
+                        let rad = u * 0.95;
+                        let n = 14;
+                        let dir = if i == 3 { 1.0 } else { -1.0 };
+                        let a0 = -PI * 0.5;
+                        let mut prev = vec2(x + rad * a0.cos(), y + rad * a0.sin());
+                        for k in 1..=n {
+                            let a = a0 + dir * (k as f32 / n as f32) * PI * 1.5;
+                            let p = vec2(x + rad * a.cos(), y + rad * a.sin());
+                            draw_line(prev.x, prev.y, p.x, p.y, th, col);
+                            prev = p;
+                        }
+                        // punta de flecha al final del arco
+                        let a = a0 + dir * PI * 1.5;
+                        let tip = vec2(x + rad * a.cos(), y + rad * a.sin());
+                        let tang = vec2(-a.sin(), a.cos()) * dir;
+                        let norm = vec2(a.cos(), a.sin());
+                        draw_triangle(
+                            tip + tang * u * 0.7,
+                            tip - norm * u * 0.55,
+                            tip + norm * u * 0.55,
+                            col,
+                        );
+                    }
+                    4 => draw_triangle(vec2(x, y + u * 1.1), vec2(x - u * 1.1, y - u * 0.7), vec2(x + u * 1.1, y - u * 0.7), col),
+                    _ => {
+                        draw_triangle(vec2(x, y + u * 0.2), vec2(x - u * 1.0, y - u * 1.0), vec2(x + u * 1.0, y - u * 1.0), col);
+                        draw_triangle(vec2(x, y + u * 1.0), vec2(x - u * 1.0, y - u * 0.2), vec2(x + u * 1.0, y - u * 0.2), col);
+                        draw_rectangle(x - u * 1.1, y + u * 1.1, u * 2.2, th, col);
+                    }
+                }
+            }
+        }
+    }
+
     /// Aviso del reto lateral entre el titulo y el tablero.
     fn draw_lateral_banner(&self, l: &Lay) {
         let w = screen_width();
@@ -2013,20 +2185,23 @@ impl App {
     fn draw_pause(&self) {
         self.draw_overlay_bg();
         let (w, h) = (screen_width(), screen_height());
-        let ts = fit_size("PAUSA", w * 0.16, w * 0.8);
-        text_3d_c("PAUSA", w / 2.0, h * 0.38, ts, CYAN);
+        let n = if self.puzzle.is_some() { 5 } else { 4 };
+        let rs = overlay_rects(n);
+        let ts = fit_size("PAUSA", (w * 0.16).min(h * 0.09), w * 0.8);
+        text_3d_c("PAUSA", w / 2.0, rs[0].y - ts * 0.6, ts, CYAN);
+        let pad_label = if pad_on() { "BOTONES: SI" } else { "BOTONES: NO" };
         if self.puzzle.is_some() {
-            let rs = overlay_rects(4);
             button(rs[0], "CONTINUAR", GREEN, true, 0.0);
             button(rs[1], "PISTA", GOLD, true, 0.0);
             button(rs[2], "REINICIAR", CYAN, true, 0.0);
             button(rs[3], "ACERTIJOS", MAGENTA, true, 0.0);
+            button(rs[4], pad_label, VIOLET, true, 0.0);
             return;
         }
-        let rs = overlay_rects(3);
         button(rs[0], "CONTINUAR", GREEN, true, 0.0);
         button(rs[1], "REINICIAR", GOLD, true, 0.0);
-        button(rs[2], "MENU", MAGENTA, true, 0.0);
+        button(rs[2], pad_label, VIOLET, true, 0.0);
+        button(rs[3], "MENU", MAGENTA, true, 0.0);
     }
 
     fn draw_over(&self) {
