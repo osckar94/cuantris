@@ -19,13 +19,17 @@ pub enum S {
     Over,
     Click,
     Tunnel,
+    LatIn,
+    LatOut,
 }
 
 pub struct Sfx {
     pub on: bool,
     sounds: Vec<Option<Sound>>,
     music: Option<Sound>,
-    music_on: bool,
+    music_lat: Option<Sound>,
+    /// Bucle sonando: None = ninguno, Some(true) = modo lateral
+    playing: Option<bool>,
 }
 
 impl Sfx {
@@ -44,17 +48,21 @@ impl Sfx {
             snd_over(),
             snd_click(),
             snd_tunnel(),
+            snd_lat_in(),
+            snd_lat_out(),
         ];
         let mut sounds = Vec::new();
         for d in defs.iter() {
             sounds.push(load_sound_from_bytes(&wav(d)).await.ok());
         }
         let music = load_sound_from_bytes(&wav(&music())).await.ok();
+        let music_lat = load_sound_from_bytes(&wav(&music_lateral())).await.ok();
         Sfx {
             on: true,
             sounds,
             music,
-            music_on: false,
+            music_lat,
+            playing: None,
         }
     }
 
@@ -73,13 +81,21 @@ impl Sfx {
         }
     }
 
-    pub fn music(&mut self, want: bool) {
-        let want = want && self.on;
-        if want == self.music_on {
+    /// Enciende, apaga o cambia de bucle segun el modo (vertical o lateral).
+    pub fn music(&mut self, want: bool, lateral: bool) {
+        let target = if want && self.on { Some(lateral) } else { None };
+        if target == self.playing {
             return;
         }
-        if let Some(m) = &self.music {
-            if want {
+        if let Some(cur) = self.playing {
+            let m = if cur { &self.music_lat } else { &self.music };
+            if let Some(m) = m {
+                stop_sound(m);
+            }
+        }
+        if let Some(next) = target {
+            let m = if next { &self.music_lat } else { &self.music };
+            if let Some(m) = m {
                 play_sound(
                     m,
                     PlaySoundParams {
@@ -87,11 +103,9 @@ impl Sfx {
                         volume: 0.35,
                     },
                 );
-            } else {
-                stop_sound(m);
             }
         }
-        self.music_on = want;
+        self.playing = target;
     }
 }
 
@@ -310,6 +324,57 @@ fn snd_tunnel() -> Vec<f32> {
         *s = ((ph * TAU).sin() * 0.45 + (1.0 - 4.0 * (ph2 - 0.5).abs()) * 0.18) * env;
     }
     tone(&mut o, 0.3, 0.12, 620.0, 980.0, Wave::Tri, 0.35, 0.003, 18.0);
+    o
+}
+
+/// Entrada al modo lateral: barrido ascendente con soplo de ruido.
+fn snd_lat_in() -> Vec<f32> {
+    let mut o = Vec::new();
+    tone(&mut o, 0.0, 0.6, 180.0, 1500.0, Wave::Tri, 0.32, 0.12, 2.0);
+    tone(&mut o, 0.0, 0.6, 270.0, 2250.0, Wave::Sine, 0.18, 0.12, 2.0);
+    tone(&mut o, 0.0, 0.55, 0.0, 0.0, Wave::Noise, 0.1, 0.2, 3.0);
+    tone(&mut o, 0.5, 0.45, 1174.66, 1174.66, Wave::Sine, 0.22, 0.005, 6.0);
+    tone(&mut o, 0.5, 0.45, 1661.22, 1661.22, Wave::Sine, 0.16, 0.005, 6.0);
+    o
+}
+
+/// Salida del modo lateral: acorde que se resuelve y baja.
+fn snd_lat_out() -> Vec<f32> {
+    let mut o = Vec::new();
+    for (i, f) in [783.99f32, 659.25, 523.25].iter().enumerate() {
+        tone(&mut o, i as f32 * 0.07, 0.5, *f, *f, Wave::Sine, 0.26, 0.004, 5.0);
+    }
+    tone(&mut o, 0.0, 0.4, 900.0, 220.0, Wave::Tri, 0.14, 0.02, 4.0);
+    o
+}
+
+/// Bucle del modo lateral (8 s): tonos enteros, sin centro claro, a saltos.
+fn music_lateral() -> Vec<f32> {
+    let len = (8.0 * SR) as usize;
+    let mut o = vec![0.0; len];
+    let scale = [261.63f32, 293.66, 329.63, 369.99, 415.30, 466.16];
+    // Colchon: dos acordes aumentados que nunca resuelven
+    let pads: [[usize; 3]; 2] = [[0, 2, 4], [1, 3, 5]];
+    for (i, pad) in pads.iter().enumerate() {
+        for &n in pad.iter() {
+            let f = scale[n];
+            tone(&mut o, i as f32 * 4.0, 3.96, f, f, Wave::Sine, 0.07, 0.8, 0.25);
+        }
+    }
+    // Campanas en patron irregular: la melodia salta en vez de avanzar
+    let steps = [0usize, 3, 1, 5, 2, 4, 0, 5, 3, 1, 4, 2, 5, 0, 2, 3];
+    let times = [0.0f32, 0.75, 1.25, 2.0, 2.5, 3.5, 4.0, 4.5, 5.25, 5.75, 6.25, 6.75, 7.0, 7.25, 7.5, 7.7];
+    for (i, &n) in steps.iter().enumerate() {
+        let f = scale[n] * 2.0;
+        tone(&mut o, times[i], 0.28, f, f, Wave::Sine, 0.075, 0.004, 7.0);
+        tone(&mut o, times[i], 0.2, f * 2.0, f * 2.0, Wave::Sine, 0.022, 0.004, 12.0);
+    }
+    // Pulso grave en 5 por compas
+    for b in 0..10 {
+        let r = scale[if b < 5 { 0 } else { 1 }] / 2.0;
+        tone(&mut o, b as f32 * 0.8, 0.5, r, r, Wave::Tri, 0.08, 0.02, 5.0);
+    }
+    o.truncate(len);
     o
 }
 

@@ -1,8 +1,10 @@
 mod game;
 mod lateral;
+mod modo_lateral;
 mod pieces;
 mod puzzles;
 mod sfx;
+mod volumen;
 
 use lateral::{Challenge, Stats, Tech};
 use puzzles::{Goal, PUZZLES};
@@ -197,11 +199,11 @@ fn lay() -> Lay {
 
 fn menu_rects() -> [Rect; 4] {
     let (w, h) = (screen_width(), screen_height());
-    let bw = (w * 0.74).min(h * 0.5);
-    let bh = (h * 0.075).min(bw * 0.22);
+    let bw = (w * 0.84).min(h * 0.52);
+    let bh = (h * 0.095).min(bw * 0.25);
     let x = (w - bw) / 2.0;
-    let y0 = h * 0.31;
-    let st = bh * 1.28;
+    let y0 = h * 0.27;
+    let st = bh * 1.36;
     [
         Rect::new(x, y0, bw, bh),
         Rect::new(x, y0 + st, bw, bh),
@@ -311,43 +313,44 @@ fn quad(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, c: Color) {
     draw_triangle(p0, p2, p3, c);
 }
 
-/// Bloque con volumen: sombra proyectada, biseles iluminados desde arriba a la
-/// izquierda, cara con degradado y brillo especular.
+/// Cubo: cara frontal arriba a la izquierda y grosor oblicuo hacia abajo a la
+/// derecha, dentro de su celda (las celdas vecinas se siguen distinguiendo).
 fn draw_block(x: f32, y: f32, s: f32, c: Color, a: f32) {
-    // Halo de luz suave
-    let g = s * 0.14;
-    draw_rectangle(x - g, y - g, s + 2.0 * g, s + 2.0 * g, alpha(c, 0.07 * a));
-    // Sombra proyectada (abajo a la derecha)
-    let so = s * 0.12;
-    draw_rectangle(x + so, y + so, s, s, Color::new(0.0, 0.0, 0.02, 0.35 * a));
-
-    let b = (s * 0.17).max(1.5);
-    let (x0, y0, x1, y1) = (x, y, x + s, y + s);
-    let (ix0, iy0, ix1, iy1) = (x + b, y + b, x + s - b, y + s - b);
-    let white = Color::new(1.0, 1.0, 1.0, a);
-    // Biseles: arriba (mas claro), izquierda, derecha, abajo (mas oscuro)
-    quad(vec2(x0, y0), vec2(x1, y0), vec2(ix1, iy0), vec2(ix0, iy0), alpha(mix(c, white, 0.55), a));
-    quad(vec2(x0, y0), vec2(ix0, iy0), vec2(ix0, iy1), vec2(x0, y1), alpha(mix(c, white, 0.25), a));
-    quad(vec2(x1, y0), vec2(x1, y1), vec2(ix1, iy1), vec2(ix1, iy0), shade(c, 0.55, a));
-    quad(vec2(x0, y1), vec2(ix0, iy1), vec2(ix1, iy1), vec2(x1, y1), shade(c, 0.35, a));
-    // Cara con degradado vertical
+    let d = (s * 0.17).max(1.5);
+    let f = s - d;
+    // Sombra proyectada sobre el fondo
+    draw_rectangle(x + d * 1.2, y + d * 1.2, s, s, Color::new(0.0, 0.0, 0.02, 0.32 * a));
+    // Grosor: cara derecha y cara inferior
+    quad(vec2(x + f, y), vec2(x + s, y + d), vec2(x + s, y + s), vec2(x + f, y + f), shade(c, 0.46, a));
+    quad(vec2(x, y + f), vec2(x + f, y + f), vec2(x + s, y + s), vec2(x + d, y + s), shade(c, 0.26, a));
+    // Biseles de la cara frontal
+    let b = (f * 0.15).max(1.0);
+    let (ix0, iy0, ix1, iy1) = (x + b, y + b, x + f - b, y + f - b);
+    let white = Color::new(1.0, 1.0, 1.0, 1.0);
+    quad(vec2(x, y), vec2(x + f, y), vec2(ix1, iy0), vec2(ix0, iy0), alpha(mix(c, white, 0.62), a));
+    quad(vec2(x, y), vec2(ix0, iy0), vec2(ix0, iy1), vec2(x, y + f), alpha(mix(c, white, 0.32), a));
+    quad(vec2(x + f, y), vec2(x + f, y + f), vec2(ix1, iy1), vec2(ix1, iy0), shade(c, 0.72, a));
+    quad(vec2(x, y + f), vec2(ix0, iy1), vec2(ix1, iy1), vec2(x + f, y + f), shade(c, 0.58, a));
+    // Cara con degradado y brillo de gema
     let fw = ix1 - ix0;
     let fh = iy1 - iy0;
-    let bands = 4;
-    for k in 0..bands {
-        let f = k as f32 / (bands - 1) as f32;
-        let col = mix(mix(c, white, 0.18), shade(c, 0.8, 1.0), f);
-        draw_rectangle(ix0, iy0 + fh * k as f32 / bands as f32, fw, fh / bands as f32 + 0.5, alpha(col, a));
-    }
-    // Brillo especular
-    draw_rectangle(ix0 + fw * 0.08, iy0 + fh * 0.1, fw * 0.45, fh * 0.14, Color::new(1.0, 1.0, 1.0, 0.45 * a));
-    draw_circle(ix0 + fw * 0.2, iy0 + fh * 0.42, (s * 0.05).max(0.8), Color::new(1.0, 1.0, 1.0, 0.35 * a));
-    // Contorno fino
-    draw_rectangle_lines(x0, y0, s, s, (s * 0.04).max(1.0), Color::new(0.0, 0.0, 0.0, 0.45 * a));
+    volumen::grad_v(ix0, iy0, fw, fh, alpha(mix(c, white, 0.26), a), shade(c, 0.74, a));
+    draw_triangle(vec2(ix0, iy0), vec2(ix1, iy0), vec2(ix0, iy1), Color::new(1.0, 1.0, 1.0, 0.11 * a));
+    draw_rectangle(ix0 + fw * 0.1, iy0 + fh * 0.1, fw * 0.42, fh * 0.13, Color::new(1.0, 1.0, 1.0, 0.6 * a));
+    draw_rectangle(ix0 + fw * 0.1, iy0 + fh * 0.3, fw * 0.12, fh * 0.12, Color::new(1.0, 1.0, 1.0, 0.45 * a));
+}
+
+/// Titulo en fuente de bloques: y es la linea base, como en draw_text.
+fn block_title(t: &str, cx: f32, y: f32, max_h: f32, max_w: f32, c: Color) {
+    let cell = (max_w / volumen::block_text_width(t, 1.0).max(1.0)).min(max_h / 7.0).max(1.0);
+    volumen::block_text_c(t, cx, y - cell * 7.0, cell, c);
 }
 
 /// Marca de pieza TUNEL: flecha hacia abajo con anillos que bajan.
 fn tunnel_mark(cx: f32, cy: f32, s: f32, t: f32) {
+    // Centrado en la cara del cubo, con un agujero oscuro detras
+    let (cx, cy) = (cx - s * 0.085, cy - s * 0.085);
+    draw_circle(cx, cy, s * 0.34, Color::new(0.0, 0.05, 0.08, 0.55));
     let p = (t * 4.0).fract();
     for k in 0..2 {
         let q = (p + k as f32 * 0.5).fract();
@@ -377,9 +380,14 @@ fn text_3d_c(t: &str, cx: f32, y: f32, size: f32, c: Color) {
 }
 
 fn ent_mark(cx: f32, cy: f32, s: f32, t: f32) {
+    // Esfera engastada en la cara del cubo
+    let (cx, cy) = (cx - s * 0.085, cy - s * 0.085);
     let p = (t * 5.0).sin() * 0.5 + 0.5;
-    draw_circle(cx, cy, s * (0.11 + 0.05 * p), Color::new(1.0, 1.0, 1.0, 0.9));
-    draw_circle_lines(cx, cy, s * 0.3, (s * 0.05).max(1.0), Color::new(0.85, 0.6, 1.0, 0.7));
+    let r = s * (0.13 + 0.04 * p);
+    draw_circle(cx, cy, s * 0.26, Color::new(0.12, 0.03, 0.28, 0.75));
+    draw_circle_lines(cx, cy, s * 0.28, (s * 0.05).max(1.0), Color::new(0.85, 0.6, 1.0, 0.8));
+    draw_circle(cx, cy, r, Color::new(0.93, 0.86, 1.0, 1.0));
+    draw_circle(cx - r * 0.3, cy - r * 0.35, r * 0.38, WHITE);
 }
 
 fn wavy_line(a: Vec2, b: Vec2, amp: f32, t: f32, thick: f32, c: Color) {
@@ -400,48 +408,60 @@ fn wavy_line(a: Vec2, b: Vec2, amp: f32, t: f32, thick: f32, c: Color) {
     }
 }
 
-/// Panel hundido (vitrina): sombra interior arriba/izquierda, luz abajo/derecha.
+/// Vitrina hundida: labio con luz abajo/derecha y sombra interior arriba/izquierda.
 fn panel(r: Rect, c: Color) {
-    draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.02, 0.03, 0.08, 0.85));
-    let d = (r.h.min(r.w) * 0.08).max(2.0);
-    for i in 0..3 {
-        let k = i as f32 / 3.0;
-        let a = 0.35 * (1.0 - k);
-        draw_rectangle(r.x, r.y + d * k, r.w, d / 3.0, Color::new(0.0, 0.0, 0.0, a));
-        draw_rectangle(r.x + d * k, r.y, d / 3.0, r.h, Color::new(0.0, 0.0, 0.0, a));
-    }
-    draw_line(r.x, r.y + r.h, r.x + r.w, r.y + r.h, 2.0, alpha(c, 0.55));
-    draw_line(r.x + r.w, r.y, r.x + r.w, r.y + r.h, 2.0, alpha(c, 0.35));
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, alpha(c, 0.3));
+    let e = (r.h.min(r.w) * 0.06).max(2.0).min(8.0);
+    let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.w, r.y + r.h);
+    let (ox0, oy0, ox1, oy1) = (x0 - e, y0 - e, x1 + e, y1 + e);
+    let edge = mix(Color::new(0.16, 0.2, 0.34, 1.0), c, 0.35);
+    quad(vec2(ox0, oy0), vec2(ox1, oy0), vec2(x1, y0), vec2(x0, y0), shade(edge, 0.3, 1.0));
+    quad(vec2(ox0, oy0), vec2(x0, y0), vec2(x0, y1), vec2(ox0, oy1), shade(edge, 0.42, 1.0));
+    quad(vec2(ox1, oy0), vec2(ox1, oy1), vec2(x1, y1), vec2(x1, y0), shade(edge, 0.85, 1.0));
+    quad(vec2(ox0, oy1), vec2(x0, y1), vec2(x1, y1), vec2(ox1, oy1), mix(edge, WHITE, 0.25));
+    // Fondo y sombra interior
+    volumen::grad_v(x0, y0, r.w, r.h, Color::new(0.008, 0.012, 0.04, 0.97), Color::new(0.04, 0.05, 0.12, 0.97));
+    let d = (r.h.min(r.w) * 0.16).max(4.0).min(22.0);
+    let clear = Color::new(0.0, 0.0, 0.0, 0.0);
+    volumen::grad_v(x0, y0, r.w, d, Color::new(0.0, 0.0, 0.0, 0.7), clear);
+    volumen::grad_h(x0, y0, d * 0.8, r.h, Color::new(0.0, 0.0, 0.0, 0.5), clear);
+    volumen::grad_v(x0, y1 - d, r.w, d, alpha(c, 0.0), alpha(c, 0.14));
 }
 
-/// Boton con volumen: canto inferior (grosor), cara con degradado y brillo.
+/// Tecla fisica: sombra en el suelo, canto grueso, cara convexa y brillo.
 fn button(r: Rect, label: &str, c: Color, enabled: bool, pulse: f32) {
-    let a = if enabled { 1.0 } else { 0.35 };
-    let depth = (r.h * 0.13).max(3.0);
-    // Sombra en el suelo y canto del boton
-    draw_rectangle(r.x + depth * 0.6, r.y + depth * 1.6, r.w, r.h, Color::new(0.0, 0.0, 0.0, 0.35 * a));
-    draw_rectangle(r.x, r.y + depth, r.w, r.h, shade(c, 0.28, 0.95 * a));
-    draw_rectangle_lines(r.x, r.y + depth, r.w, r.h, 1.5, shade(c, 0.5, 0.8 * a));
-    // Cara
-    let bands = 5;
-    for k in 0..bands {
-        let f = k as f32 / (bands - 1) as f32;
-        let col = mix(shade(c, 0.42, 1.0), shade(c, 0.16, 1.0), f);
-        draw_rectangle(r.x, r.y + r.h * k as f32 / bands as f32, r.w, r.h / bands as f32 + 0.5, alpha(col, 0.95 * a));
-    }
+    button_d(r, label, c, enabled, pulse, volumen::key_depth(r.h));
+}
+
+fn button_d(r: Rect, label: &str, c: Color, enabled: bool, pulse: f32, depth: f32) {
+    let base = if enabled { c } else { mix(c, Color::new(0.3, 0.32, 0.4, 1.0), 0.72) };
+    let lit = if enabled { 1.0 } else { 0.62 };
+    let rad = (r.h * 0.24).min(r.w * 0.24);
+    volumen::rounded_rect(r.x + depth * 0.3, r.y + depth * 1.4, r.w, r.h, rad, Color::new(0.0, 0.0, 0.0, 0.45));
+    // Canto (de la cara hacia el suelo)
+    volumen::rounded_grad(r.x, r.y + depth * 0.5, r.w, r.h + depth * 0.5, rad, shade(base, 0.42 * lit, 1.0), shade(base, 0.2 * lit, 1.0));
+    // Filo claro y cara
+    volumen::rounded_rect(r.x, r.y, r.w, r.h, rad, shade(mix(base, WHITE, 0.4), lit, 1.0));
+    let e = (r.h * 0.04).max(1.5);
+    volumen::rounded_grad(r.x + e, r.y + e, r.w - e * 2.0, r.h - e * 2.0, rad - e, shade(base, 0.86 * lit, 1.0), shade(base, 0.4 * lit, 1.0));
     if pulse > 0.0 {
-        draw_rectangle(r.x, r.y, r.w, r.h, alpha(c, 0.2 * pulse));
+        volumen::rounded_rect(r.x + e, r.y + e, r.w - e * 2.0, r.h - e * 2.0, rad - e, Color::new(1.0, 1.0, 1.0, 0.22 * pulse));
     }
-    // Brillo superior (vidrio)
-    draw_rectangle(r.x + 2.0, r.y + 2.0, r.w - 4.0, r.h * 0.32, Color::new(1.0, 1.0, 1.0, 0.10 * a));
-    draw_line(r.x + 2.0, r.y + 1.5, r.x + r.w - 2.0, r.y + 1.5, 2.0, alpha(mix(c, WHITE, 0.6), 0.8 * a));
-    draw_rectangle_lines(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + depth + 6.0, 3.0, alpha(c, 0.12 * a));
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, alpha(c, 0.9 * a));
+    // Brillo curvo en la mitad superior
+    let gm = r.w.min(r.h) * 0.08;
+    volumen::rounded_grad(
+        r.x + gm,
+        r.y + e + r.h * 0.03,
+        r.w - gm * 2.0,
+        r.h * 0.4,
+        rad * 0.75,
+        Color::new(1.0, 1.0, 1.0, 0.42 * lit),
+        Color::new(1.0, 1.0, 1.0, 0.03),
+    );
     if !label.is_empty() {
-        let size = fit_size(label, r.h * 0.42, r.w * 0.86);
+        let a = if enabled { 1.0 } else { 0.6 };
+        let size = fit_size(label, r.h * 0.42, r.w * 0.84);
         let ty = r.y + r.h / 2.0 + size * 0.32;
-        text_c(label, r.x + r.w / 2.0 + 1.5, ty + 1.5, size, Color::new(0.0, 0.0, 0.0, 0.6 * a));
+        text_c(label, r.x + r.w / 2.0 + 1.5, ty + 1.5, size, Color::new(0.0, 0.0, 0.0, 0.8 * a));
         text_c(label, r.x + r.w / 2.0, ty, size, alpha(WHITE, a));
     }
 }
@@ -454,54 +474,8 @@ fn hash(i: u32) -> f32 {
     (x % 10000) as f32 / 10000.0
 }
 
-fn draw_bg(t: f32) {
-    let (w, h) = (screen_width(), screen_height());
-    let n = 24;
-    for i in 0..n {
-        let f = i as f32 / n as f32;
-        let c = Color::new(0.02 + 0.03 * f, 0.01 + 0.02 * (1.0 - f), 0.07 + 0.07 * f, 1.0);
-        draw_rectangle(0.0, h * f, w, h / n as f32 + 1.0, c);
-    }
-    // Nebulosas suaves que se mueven despacio (profundidad)
-    let neb = [(0.2f32, 0.3f32, VIOLET), (0.8, 0.55, CYAN), (0.35, 0.85, MAGENTA)];
-    for (k, &(nx, ny, nc)) in neb.iter().enumerate() {
-        let cx = w * (nx + 0.06 * (t * 0.07 + k as f32 * 2.0).sin());
-        let cy = h * (ny + 0.04 * (t * 0.05 + k as f32).cos());
-        let r0 = w.max(h) * 0.32;
-        for j in 0..8 {
-            let f = 1.0 - j as f32 / 8.0;
-            draw_circle(cx, cy, r0 * f, alpha(nc, 0.012));
-        }
-    }
-    for i in 0..90u32 {
-        let fx = hash(i * 2);
-        let fy = hash(i * 2 + 1);
-        let sp = 0.3 + hash(i + 500);
-        let tw = (t * 1.5 + i as f32).sin() * 0.5 + 0.5;
-        let y = (fy * h + t * h * 0.01 * sp) % h;
-        draw_circle(
-            fx * w,
-            y,
-            (0.6 + 1.4 * hash(i + 77)) * (w / 540.0).max(1.0),
-            Color::new(0.7, 0.8, 1.0, 0.12 + 0.4 * tw),
-        );
-    }
-    let cols = [CYAN, MAGENTA, VIOLET];
-    for (k, col) in cols.iter().enumerate() {
-        let amp = h * 0.03;
-        let base = h * (0.25 + 0.25 * k as f32);
-        let mut prev: Option<(f32, f32)> = None;
-        for s in 0..=60 {
-            let x = w * s as f32 / 60.0;
-            let y = base
-                + (x / w * 7.0 + t * (0.6 + 0.3 * k as f32)).sin() * amp
-                + (x / w * 17.0 - t * 0.9).sin() * amp * 0.4;
-            if let Some((px, py)) = prev {
-                draw_line(px, py, x, y, 2.0, alpha(*col, 0.07));
-            }
-            prev = Some((x, y));
-        }
-    }
+fn draw_bg(t: f32, k: f32, flow: Vec2) {
+    modo_lateral::fondo(t, k, flow);
 }
 
 fn draw_mini(spec: &Spec, r: Rect, ms: f32, t: f32) {
@@ -545,7 +519,23 @@ fn draw_mini(spec: &Spec, r: Rect, ms: f32, t: f32) {
 
 // ---------------------------------------------------------------- app
 
+/// Momento de exito de un reto: el juego se congela un instante.
+struct Eureka {
+    t: f32,
+    tech: Tech,
+    bonus: u64,
+}
+
 struct App {
+    /// Mundo actual: 0 = modo vertical, 1 = modo lateral (suavizado)
+    lat_k: f32,
+    lat_on: bool,
+    flow: Vec2,
+    /// Barrido de cambio de mundo: (progreso 0..1, entrando)
+    wipe: Option<(f32, bool)>,
+    sway_t: f32,
+    next_total: u32,
+    eureka: Option<Eureka>,
     state: State,
     game: Game,
     mode: Mode,
@@ -604,6 +594,13 @@ impl App {
             });
         }
         App {
+            lat_k: 0.0,
+            lat_on: false,
+            flow: Vec2::ZERO,
+            wipe: None,
+            sway_t: 9.0,
+            next_total: 5,
+            eureka: None,
             state: State::Menu,
             game: Game::new(Mode::Normal),
             mode: Mode::Normal,
@@ -652,7 +649,7 @@ impl App {
             Tech::Supuesto => &[(1, 0), (3, 0)],
             Tech::Invertir => &[(0, 1), (1, 1)],
             Tech::Mirar => &[(0, 2)],
-            Tech::Orden | Tech::Inesperado => &[],
+            Tech::Orden | Tech::Inesperado | Tech::Lado => &[],
         };
         for &(i, f) in marks.iter() {
             if let Some(s) = self.game.queue.get_mut(i) {
@@ -677,12 +674,13 @@ impl App {
         self.popups.clear();
         self.block_input = true;
         let _ = l;
-        self.sfx.play(S::Entangle, 0.6);
     }
 
-    fn next_interval(&self) -> u32 {
+    /// Programa cuantas piezas faltan para volver al modo lateral.
+    fn schedule_next(&mut self) {
         let (a, b) = lateral::level(self.mode).every;
-        a + game::rand_int((b - a + 1) as i32) as u32
+        self.next_ch = a + game::rand_int((b - a + 1) as i32) as u32;
+        self.next_total = self.next_ch;
     }
 
     /// La pista del reto se muestra segun el nivel (FACIL siempre, NORMAL a mitad).
@@ -699,7 +697,7 @@ impl App {
 
     /// Revisa el reto activo tras colocar una pieza.
     #[allow(clippy::too_many_arguments)]
-    fn on_placed(&mut self, l: &Lay, kind: usize, rot: usize, from_hold: bool, observed: bool, tunneled: bool, lines: usize) {
+    fn on_placed(&mut self, l: &Lay, kind: usize, rot: usize, from_hold: bool, observed: bool, tunneled: bool, slid: bool, lines: usize) {
         if self.puzzle.is_some() || self.state != State::Playing {
             self.ent_flag = false;
             return;
@@ -722,6 +720,7 @@ impl App {
             Tech::Invertir => ent,
             Tech::Mirar => observed && lines > 0,
             Tech::Inesperado => rot == 2 && (kind == 2 || kind == 5 || kind == 6) && lines > 0,
+            Tech::Lado => slid,
         };
         ch.left = ch.left.saturating_sub(1);
         let tech = ch.tech;
@@ -732,7 +731,9 @@ impl App {
             let bonus = 500 * self.game.level as u64;
             self.game.score += bonus;
             self.game.add_charge();
-            self.popup(l, &format!("PENSASTE DE LADO! +{}", bonus), GREEN, true);
+            self.popups.clear();
+            self.eureka = Some(Eureka { t: 0.0, tech, bonus });
+            self.block_input = true;
             self.sfx.play(S::Level, 0.6);
             for k in 0..20 {
                 let p = vec2(l.bx + l.cell * (k % 10) as f32 + l.cell * 0.5, l.by + l.cell * 2.0);
@@ -740,14 +741,14 @@ impl App {
             }
             self.challenge = None;
             self.last_result = Some((tech, true, 0.0));
-            self.next_ch = self.next_interval();
+            self.schedule_next();
         } else if left == 0 {
             self.game_stats.add(tech, false);
             self.session_stats.add(tech, false);
             self.popup(l, "RETO NO SUPERADO", MAGENTA, false);
             self.challenge = None;
             self.last_result = Some((tech, false, 0.0));
-            self.next_ch = self.next_interval();
+            self.schedule_next();
         }
     }
 
@@ -761,6 +762,8 @@ impl App {
 
     fn start_puzzle(&mut self, i: usize, hint: bool) {
         let i = i.min(PUZZLES.len() - 1);
+        self.challenge = None;
+        self.eureka = None;
         self.puzzle = Some(i);
         self.game = Game::from_puzzle(&PUZZLES[i]);
         self.clear_fx();
@@ -844,11 +847,13 @@ impl App {
     fn start(&mut self, mode: Mode) {
         self.puzzle = None;
         self.challenge = None;
+        self.eureka = None;
         let mi = MODES.iter().position(|m| *m == mode).unwrap_or(0);
         self.intro = !self.intro_seen[mi];
         self.intro_seen[mi] = true;
         self.intro_t = 0.0;
         self.next_ch = lateral::level(mode).every.0;
+        self.next_total = self.next_ch;
         self.game_stats = Stats::default();
         self.last_result = None;
         self.ent_flag = false;
@@ -934,7 +939,7 @@ impl App {
         if r.contains(pos) {
             self.sfx.on = !self.sfx.on;
             if !self.sfx.on {
-                self.sfx.music(false);
+                self.sfx.music(false, false);
             }
             self.sfx.play(S::Click, 0.5);
             return true;
@@ -956,8 +961,44 @@ impl App {
             State::PzFail => self.update_pzfail(&ptrs, &l),
         }
         self.update_fx(dt, &l);
+        self.update_world(dt);
         let playing = self.state == State::Playing;
-        self.sfx.music(playing);
+        self.sfx.music(playing, self.lat_on);
+    }
+
+    /// Cambio de mundo: decide el modo y anima fondo, barrido y balanceo.
+    fn update_world(&mut self, dt: f32) {
+        if self.state == State::Over {
+            // Un game over a mitad de reto termina el modo lateral.
+            self.challenge = None;
+            self.eureka = None;
+        }
+        let target = match self.state {
+            State::Menu | State::Over => false,
+            State::Puzzles => true,
+            _ => self.challenge.is_some() || self.eureka.is_some() || self.puzzle.is_some(),
+        };
+        if target != self.lat_on {
+            self.lat_on = target;
+            if self.state != State::Over {
+                self.wipe = Some((0.0, target));
+                self.sway_t = 0.0;
+                self.sfx.play(if target { S::LatIn } else { S::LatOut }, 0.6);
+            }
+        }
+        let goal = if target { 1.0 } else { 0.0 };
+        self.lat_k += (goal - self.lat_k) * (1.0 - (-dt * 5.0).exp());
+        if (goal - self.lat_k).abs() < 0.002 {
+            self.lat_k = goal;
+        }
+        self.flow += modo_lateral::direccion(self.lat_k) * dt;
+        self.sway_t += dt;
+        if let Some(w) = self.wipe.as_mut() {
+            w.0 += dt / modo_lateral::BARRIDO;
+            if w.0 >= 1.0 {
+                self.wipe = None;
+            }
+        }
     }
 
     fn update_menu(&mut self, dt: f32, ptrs: &[Ptr], l: &Lay) {
@@ -1014,6 +1055,15 @@ impl App {
             }
             return;
         }
+        // Eureka: congela el juego un instante y vuelve solo.
+        if let Some(e) = self.eureka.as_mut() {
+            e.t += dt;
+            if e.t > 1.6 || (tap && e.t > 0.7) {
+                self.eureka = None;
+                self.block_input = true;
+            }
+            return;
+        }
         if let Some(c) = self.challenge.as_mut() {
             if c.announcing {
                 c.t += dt;
@@ -1021,6 +1071,7 @@ impl App {
                     c.announcing = false;
                     c.t = 0.0;
                     self.block_input = true;
+                    self.sway_t = 0.0;
                     self.sfx.play(S::Click, 0.5);
                 }
                 return;
@@ -1262,7 +1313,9 @@ impl App {
             shifts -= dir;
         }
         let soft = is_key_down(KeyCode::Down) || pad_soft;
-        self.game.update(dt, soft);
+        // Tiempo lento dentro del reto: mas margen para pensar.
+        let gdt = if !soft && self.challenge.is_some() { dt * lateral::level(self.mode).slow } else { dt };
+        self.game.update(gdt, soft);
         self.process_events(l);
         self.check_puzzle();
         if let Some(c) = self.challenge.as_mut() {
@@ -1548,8 +1601,8 @@ impl App {
                         self.sfx.play(S::Clear, 0.6);
                     }
                 }
-                Event::Placed { kind, rot, from_hold, observed, tunneled, lines } => {
-                    self.on_placed(l, kind, rot, from_hold, observed, tunneled, lines);
+                Event::Placed { kind, rot, from_hold, observed, tunneled, slid, lines } => {
+                    self.on_placed(l, kind, rot, from_hold, observed, tunneled, slid, lines);
                 }
                 Event::Entangled { cells } => {
                     self.ent_flag = true;
@@ -1659,7 +1712,7 @@ impl App {
     fn draw(&self) {
         let l = lay();
         clear_background(Color::new(0.01, 0.01, 0.04, 1.0));
-        draw_bg(self.time);
+        draw_bg(self.time, self.lat_k, self.flow);
         match self.state {
             State::Menu => self.draw_menu(),
             State::Puzzles => self.draw_puzzles(),
@@ -1676,6 +1729,8 @@ impl App {
                 } else if self.state == State::Playing {
                     if self.intro {
                         self.draw_intro();
+                    } else if let Some(e) = &self.eureka {
+                        self.draw_eureka(e);
                     } else if let Some((k, _)) = self.explain {
                         self.draw_explain(k);
                     } else if let Some(c) = &self.challenge {
@@ -1687,7 +1742,11 @@ impl App {
             }
         }
         self.draw_fx();
-        draw_sound_icon(l.sound, self.sfx.on);    }
+        if let Some((p, entra)) = self.wipe {
+            modo_lateral::barrido(p, entra);
+        }
+        draw_sound_icon(l.sound, self.sfx.on);
+    }
 
     fn draw_menu(&self) {
         let (w, h) = (screen_width(), screen_height());
@@ -1708,16 +1767,23 @@ impl App {
                 }
             }
         }
-        let ts = fit_size("CUANTRIS", (w * 0.2).min(h * 0.11), w * 0.86);
-        let ty = h * 0.15;
-        let wob = (self.time * 2.0).sin() * ts * 0.02;
-        text_3d_c("CUANTRIS", w / 2.0, ty + wob, ts, CYAN);
-        let ss = fit_size("BLOQUES CUANTICOS", ts * 0.32, w * 0.8);
-        text_c("BLOQUES CUANTICOS", w / 2.0, ty + ts * 0.5, ss, alpha(MAGENTA, 0.9));
+        // Titulo en bloques: cada letra del color de una pieza
+        let title = "CUANTRIS";
+        let tc = (w * 0.88 / volumen::block_text_width(title, 1.0)).min(h * 0.017).max(2.0);
+        let tx0 = w / 2.0 - volumen::block_text_width(title, tc) / 2.0;
+        let ty = h * 0.065;
+        for (i, ch) in title.chars().enumerate() {
+            let wob = (self.time * 2.0 + i as f32 * 0.6).sin() * tc * 0.5;
+            let lx = tx0 + i as f32 * 6.0 * tc + 2.5 * tc;
+            volumen::block_text_c(&ch.to_string(), lx, ty + wob, tc, pieces::color(i % 7));
+        }
+        let by = ty + tc * 8.6;
+        let ss = fit_size("BLOQUES CUANTICOS", tc * 2.6, w * 0.8);
+        text_c("BLOQUES CUANTICOS", w / 2.0, by + ss * 0.7, ss, alpha(GOLD, 0.95));
         wavy_line(
-            vec2(w * 0.15, ty + ts * 0.75),
-            vec2(w * 0.85, ty + ts * 0.75),
-            ts * 0.08,
+            vec2(w * 0.15, by + ss * 1.4),
+            vec2(w * 0.85, by + ss * 1.4),
+            tc * 0.8,
             self.time,
             2.0,
             alpha(CYAN, 0.6),
@@ -1733,46 +1799,34 @@ impl App {
         for (i, r) in rs.iter().enumerate() {
             let (name, desc, c) = info[i];
             let pulse = ((self.time * 2.0 + i as f32).sin() * 0.5 + 0.5) * 0.5;
-            button(*r, "", c, true, pulse);
-            draw_rectangle(r.x + 2.0, r.y + r.h * 0.62, r.w - 4.0, r.h * 0.38 - 2.0, Color::new(c.r * 0.05, c.g * 0.05, c.b * 0.09, 0.75));
-            draw_line(r.x + 2.0, r.y + r.h * 0.62, r.x + r.w - 2.0, r.y + r.h * 0.62, 1.0, alpha(c, 0.5));
-            // Mini bloque 3D decorativo a cada lado del nombre
-            let bs = r.h * 0.3;
-            draw_block(r.x + r.h * 0.18, r.y + r.h * 0.16, bs, c, 1.0);
-            draw_block(r.x + r.w - r.h * 0.18 - bs, r.y + r.h * 0.16, bs, c, 1.0);
-            let s1 = fit_size(name, r.h * 0.38, r.w * 0.7);
-            text_c(name, r.x + r.w / 2.0 + 2.0, r.y + r.h * 0.31 + s1 * 0.32 + 2.0, s1, Color::new(0.0, 0.0, 0.0, 0.6));
-            text_c(name, r.x + r.w / 2.0, r.y + r.h * 0.31 + s1 * 0.32, s1, WHITE);
-            let s2 = fit_size(desc, r.h * 0.22, r.w * 0.9);
-            text_c(desc, r.x + r.w / 2.0, r.y + r.h * 0.81 + s2 * 0.3, s2, alpha(c, 0.9));
+            button(*r, "", c, true, pulse * 0.4);
+            // Cubo decorativo a cada lado del nombre
+            let bs = r.h * 0.36;
+            draw_block(r.x + r.h * 0.16, r.y + r.h * 0.3, bs, c, 1.0);
+            draw_block(r.x + r.w - r.h * 0.16 - bs, r.y + r.h * 0.3, bs, c, 1.0);
+            let tw = r.w - r.h * 1.1;
+            let s1 = fit_size(name, r.h * 0.46, tw);
+            let ny = r.y + r.h * 0.47;
+            text_c(name, r.x + r.w / 2.0 + 2.0, ny + 2.0, s1, Color::new(0.0, 0.0, 0.0, 0.8));
+            text_c(name, r.x + r.w / 2.0, ny, s1, WHITE);
+            let s2 = fit_size(desc, r.h * 0.24, tw);
+            let dy = r.y + r.h * 0.78;
+            text_c(desc, r.x + r.w / 2.0 + 1.0, dy + 1.0, s2, Color::new(0.0, 0.0, 0.0, 0.8));
+            text_c(desc, r.x + r.w / 2.0, dy, s2, alpha(WHITE, 0.92));
         }
 
         let help = [
-            "Botones o gestos: desliza mover, toca girar",
-            "Desliza rapido abajo: caida total",
-            "Desliza arriba: guardar pieza",
-            "SUPERPOSICION: la pieza esta en 2 lugares",
-            "y colapsa al azar al tocar fondo",
-            "ENTRELAZADAS: se borran juntas a distancia",
-            "TUNEL: la pieza con flecha atraviesa bloques",
-            "Todos los niveles entrenan pensamiento lateral",
+            "Piezas cuanticas: doble, enlace y tunel",
+            "Cada nivel entrena pensamiento lateral",
         ];
         let last = rs[3];
-        let mut y = last.y + last.h + h * 0.045;
+        let mut y = last.y + last.h + h * 0.06;
         let hs = help
             .iter()
-            .map(|t| fit_size(t, (w * 0.04).min(h * 0.021), w * 0.92))
+            .map(|t| fit_size(t, (w * 0.045).min(h * 0.026), w * 0.92))
             .fold(f32::MAX, f32::min);
         for (i, t) in help.iter().enumerate() {
-            let c = if i == 7 {
-                alpha(GOLD, 0.95)
-            } else if i >= 6 {
-                alpha(TUNNEL_C, 0.95)
-            } else if i >= 3 {
-                alpha(VIOLET, 0.95)
-            } else {
-                alpha(WHITE, 0.75)
-            };
+            let c = if i == 1 { alpha(GOLD, 0.95) } else { alpha(WHITE, 0.8) };
             text_c(t, w / 2.0, y, hs, c);
             y += hs * 1.45;
         }
@@ -1792,22 +1846,23 @@ impl App {
 
     fn draw_game(&self, l: &Lay) {
         let w = screen_width();
-        // Barra de cabecera de vidrio
-        let bands = 6;
-        for k in 0..bands {
-            let f = k as f32 / bands as f32;
-            draw_rectangle(0.0, l.top * f, w, l.top / bands as f32 + 0.5, Color::new(0.05 + 0.03 * f, 0.07 + 0.03 * f, 0.18 + 0.05 * f, 0.75));
-        }
-        draw_line(0.0, l.top, w, l.top, 2.0, alpha(CYAN, 0.45));
-        draw_line(0.0, l.top + 3.0, w, l.top + 3.0, 1.0, alpha(MAGENTA, 0.25));
-        draw_rectangle(0.0, 0.0, w, l.top * 0.3, Color::new(1.0, 1.0, 1.0, 0.04));
+        // Cabecera: placa en relieve con canto y sombra
+        let ed = (l.top * 0.1).max(3.0);
+        volumen::grad_v(0.0, l.top + ed, w, ed * 2.5, Color::new(0.0, 0.0, 0.0, 0.5), Color::new(0.0, 0.0, 0.0, 0.0));
+        draw_rectangle(0.0, l.top, w, ed, Color::new(0.04, 0.06, 0.13, 1.0));
+        volumen::grad_v(0.0, 0.0, w, l.top, Color::new(0.2, 0.27, 0.44, 1.0), Color::new(0.08, 0.11, 0.22, 1.0));
+        draw_rectangle(0.0, 0.0, w, 2.0, Color::new(1.0, 1.0, 1.0, 0.35));
+        draw_line(0.0, l.top, w, l.top, 2.0, alpha(CYAN, 0.6));
         if let Some(i) = self.puzzle {
+            self.header_tint(l);
             let p = &PUZZLES[i];
             let ts = fit_size(p.name, l.top * 0.5, w * 0.62);
             text_3d_c(p.name, w / 2.0, l.top * 0.7, ts, GOLD);
             let tag = format!("RETO {}/{}", i + 1, PUZZLES.len());
             let ms = fit_size(&tag, l.top * 0.26, w * 0.17);
-            draw_text(&tag, w * 0.03, l.top * 0.62, ms, alpha(TUNNEL_C, 0.85));
+            draw_text(&tag, w * 0.03, l.top * 0.5, ms, alpha(TUNNEL_C, 0.85));
+            let mo = fit_size("LATERAL", l.top * 0.22, w * 0.17);
+            draw_text("LATERAL", w * 0.03, l.top * 0.82, mo, GOLD);
             // Meta y pista entre el titulo y el tablero
             let fr = (l.cell * 0.3).max(4.0);
             let space = (l.by - fr - l.top).max(l.cell * 1.2);
@@ -1825,18 +1880,17 @@ impl App {
                 text_c(&hint, w / 2.0, y, hsz, GOLD);
             }
         } else {
-            let ts = fit_size("CUANTRIS", l.top * 0.55, w * 0.5);
-            text_3d_c("CUANTRIS", w / 2.0, l.top * 0.7, ts, CYAN);
-            let ms = fit_size(self.game.mode.name(), l.top * 0.28, w * 0.25);
-            draw_text(self.game.mode.name(), w * 0.04, l.top * 0.62, ms, alpha(MAGENTA, 0.8));
-            self.draw_lateral_banner(l);
+            self.draw_mode_header(l);
         }
         let off = vec2(
-            (self.time * 91.0).sin() * self.shake,
+            (self.time * 91.0).sin() * self.shake + modo_lateral::balanceo(self.sway_t, l.cell),
             (self.time * 77.0).cos() * self.shake,
         );
         self.draw_board(l, off);
         self.draw_side(l);
+        if self.puzzle.is_none() {
+            self.draw_lateral_banner(l);
+        }
         let g = &self.game;
         let can_hold = !g.hold_used && g.active.is_some();
         let can_obs = g.charges > 0 && g.active.map(|a| a.dx.is_some()).unwrap_or(false);
@@ -1892,20 +1946,28 @@ impl App {
         // Marco en relieve alrededor del pozo
         let fr = (s * 0.3).max(4.0);
         let (ox0, oy0, ox1, oy1) = (bx - fr, by - fr, bx + bw + fr, by + bh + fr);
-        draw_rectangle(ox0 + fr * 0.6, oy0 + fr * 0.9, ox1 - ox0, oy1 - oy0, Color::new(0.0, 0.0, 0.0, 0.45));
-        let frame = Color::new(0.12, 0.2, 0.38, 1.0);
-        quad(vec2(ox0, oy0), vec2(ox1, oy0), vec2(bx + bw, by), vec2(bx, by), mix(frame, WHITE, 0.25));
-        quad(vec2(ox0, oy0), vec2(bx, by), vec2(bx, by + bh), vec2(ox0, oy1), mix(frame, WHITE, 0.1));
-        quad(vec2(ox1, oy0), vec2(ox1, oy1), vec2(bx + bw, by + bh), vec2(bx + bw, by), shade(frame, 0.6, 1.0));
-        quad(vec2(ox0, oy1), vec2(bx, by + bh), vec2(bx + bw, by + bh), vec2(ox1, oy1), shade(frame, 0.4, 1.0));
-        draw_rectangle_lines(ox0, oy0, ox1 - ox0, oy1 - oy0, 2.0, Color::new(0.3, 0.8, 1.0, 0.35 + 0.2 * pulse));
-        draw_line(ox0 + 2.0, oy0 + 1.5, ox1 - 2.0, oy0 + 1.5, 1.5, Color::new(0.7, 0.95, 1.0, 0.5));
-        // Fondo del pozo con degradado (mas oscuro arriba = profundidad)
-        let bands = 10;
-        for k in 0..bands {
-            let f = k as f32 / bands as f32;
-            draw_rectangle(bx, by + bh * f, bw, bh / bands as f32 + 0.5, Color::new(0.015 + 0.02 * f, 0.02 + 0.03 * f, 0.06 + 0.06 * f, 0.92));
+        draw_rectangle(ox0 + fr * 0.8, oy0 + fr * 1.1, ox1 - ox0, oy1 - oy0, Color::new(0.0, 0.0, 0.0, 0.55));
+        let frame = Color::new(0.2, 0.3, 0.5, 1.0);
+        // Moldura exterior (saliente) y labio interior (entrante)
+        let (mx0, my0, mx1, my1) = (bx - fr * 0.42, by - fr * 0.42, bx + bw + fr * 0.42, by + bh + fr * 0.42);
+        quad(vec2(ox0, oy0), vec2(ox1, oy0), vec2(mx1, my0), vec2(mx0, my0), mix(frame, WHITE, 0.45));
+        quad(vec2(ox0, oy0), vec2(mx0, my0), vec2(mx0, my1), vec2(ox0, oy1), mix(frame, WHITE, 0.15));
+        quad(vec2(ox1, oy0), vec2(ox1, oy1), vec2(mx1, my1), vec2(mx1, my0), shade(frame, 0.55, 1.0));
+        quad(vec2(ox0, oy1), vec2(mx0, my1), vec2(mx1, my1), vec2(ox1, oy1), shade(frame, 0.35, 1.0));
+        quad(vec2(mx0, my0), vec2(mx1, my0), vec2(bx + bw, by), vec2(bx, by), shade(frame, 0.2, 1.0));
+        quad(vec2(mx0, my0), vec2(bx, by), vec2(bx, by + bh), vec2(mx0, my1), shade(frame, 0.3, 1.0));
+        quad(vec2(mx1, my0), vec2(mx1, my1), vec2(bx + bw, by + bh), vec2(bx + bw, by), shade(frame, 0.8, 1.0));
+        quad(vec2(mx0, my1), vec2(bx, by + bh), vec2(bx + bw, by + bh), vec2(mx1, my1), mix(frame, WHITE, 0.2));
+        draw_rectangle_lines(ox0, oy0, ox1 - ox0, oy1 - oy0, 1.5, Color::new(0.3, 0.8, 1.0, 0.3 + 0.25 * pulse));
+        // Remaches en las esquinas de la moldura
+        let rv = (fr * 0.2).max(1.2);
+        let rm = fr * 0.71;
+        for &(rx, ry) in [(bx - rm, by - rm), (bx + bw + rm, by - rm), (bx - rm, by + bh + rm), (bx + bw + rm, by + bh + rm)].iter() {
+            draw_circle(rx, ry, rv, shade(frame, 0.45, 1.0));
+            draw_circle(rx - rv * 0.25, ry - rv * 0.25, rv * 0.5, Color::new(0.9, 0.95, 1.0, 0.9));
         }
+        // Fondo del pozo con degradado (mas oscuro arriba = profundidad)
+        volumen::grad_v(bx, by, bw, bh, Color::new(0.012, 0.016, 0.05, 0.96), Color::new(0.04, 0.055, 0.13, 0.96));
         for x in 1..W {
             let xx = bx + x as f32 * s;
             draw_line(xx, by, xx, by + bh, 1.0, Color::new(0.3, 0.5, 1.0, 0.07));
@@ -1921,6 +1983,16 @@ impl App {
             let a = 0.4 * (1.0 - k);
             draw_rectangle(bx, by + d * k, bw, d / 4.0, Color::new(0.0, 0.0, 0.0, a));
             draw_rectangle(bx + d * k, by, d / 4.0, bh, Color::new(0.0, 0.0, 0.0, a * 0.8));
+        }
+        // Modo lateral: marco dorado, rejilla de lado, luz y ecos "Y si...?"
+        modo_lateral::pozo(bx, by, bw, bh, s, t, self.lat_k);
+        if self.lat_k > 0.01 {
+            let fr = (s * 0.3).max(4.0);
+            draw_rectangle(bx - fr, by - fr, bw + 2.0 * fr, fr, alpha(GOLD, 0.5 * self.lat_k));
+            draw_rectangle(bx - fr, by + bh, bw + 2.0 * fr, fr, alpha(GOLD, 0.35 * self.lat_k));
+            draw_rectangle(bx - fr, by, fr, bh, alpha(GOLD, 0.42 * self.lat_k));
+            draw_rectangle(bx + bw, by, fr, bh, alpha(GOLD, 0.42 * self.lat_k));
+            self.draw_echoes(bx, by, s);
         }
 
         // Bloques fijos + enlaces de entrelazamiento
@@ -2161,9 +2233,12 @@ impl App {
             ]
         };
         for (name, val) in stats.iter() {
-            draw_text(name, x, y + lab * 0.8, lab * 0.9, alpha(WHITE, 0.55));
-            let vs = fit_size(val, s * 0.9, sw);
-            draw_text(val, x, y + lab + vs * 0.85, vs, WHITE);
+            // Cada dato en su propia vitrina
+            panel(Rect::new(x, y, sw, lab * 0.95 + s * 0.95), CYAN);
+            let mg = s * 0.14;
+            draw_text(name, x + mg, y + lab * 0.85, lab * 0.85, alpha(WHITE, 0.65));
+            let vs = fit_size(val, s * 0.82, sw - mg * 2.0);
+            draw_text(val, x + mg, y + lab * 0.85 + s * 0.78, vs, WHITE);
             y += lab + s * 1.15;
         }
         if self.best > 0 && self.puzzle.is_none() {
@@ -2186,7 +2261,7 @@ impl App {
         let ph = h * 0.86;
         let py = h * 0.07;
         panel(Rect::new(px, py, pw, ph), GOLD);
-        let ls = (ph / 26.0).min(w * 0.042);
+        let ls = (ph / 30.0).min(w * 0.042);
         let cx = w / 2.0;
         let mut y = py + ls * 2.4;
         let t = "ENTRENA TU";
@@ -2196,9 +2271,10 @@ impl App {
         text_3d_c(t, cx, y, fit_size(t, ls * 2.0, pw * 0.9), GOLD);
         y += ls * 2.0;
         let lines = [
-            ("CUANDO: cada pocas piezas llega un RETO LATERAL.", WHITE),
-            ("El juego se detiene y te avisa.", alpha(WHITE, 0.8)),
-            ("COMO: te hace una pregunta \"Y si...?\" y te da", WHITE),
+            ("MODO VERTICAL: juegas directo, todo cae.", CYAN),
+            ("Cada pocas piezas saltas al MODO LATERAL:", GOLD),
+            ("el mundo gira de lado y el tiempo va lento.", alpha(WHITE, 0.85)),
+            ("Te hace una pregunta \"Y si...?\" y te da", WHITE),
             ("pocas piezas para lograr algo poco obvio.", WHITE),
         ];
         for (s, c) in lines.iter() {
@@ -2206,7 +2282,7 @@ impl App {
             y += ls * 1.45;
         }
         y += ls * 0.5;
-        let t = "LAS 5 TECNICAS Y SU HERRAMIENTA";
+        let t = "LAS 6 TECNICAS Y SU HERRAMIENTA";
         text_c(t, cx, y, fit_size(t, ls * 1.05, pw * 0.92), TUNNEL_C);
         y += ls * 1.6;
         let rows = [
@@ -2215,6 +2291,7 @@ impl App {
             ("INVIERTE EL PROBLEMA", "piezas con punto (enlace)", VIOLET),
             ("MIRA DISTINTO", "boton OBSERVAR", GOLD),
             ("USA LO INESPERADO", "girar: pieza boca abajo", CYAN),
+            ("ENTRA DE LADO", "deslizar bajo un saliente", GREEN),
         ];
         for (name, tool, c) in rows.iter() {
             let s1 = fit_size(name, ls * 0.95, pw * 0.5);
@@ -2359,45 +2436,239 @@ impl App {
             None => return,
         };
         let (w, h) = (screen_width(), screen_height());
-        draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.05, 0.55));
-        let pw = (w * 0.92).min(h * 0.6);
-        let px = (w - pw) / 2.0;
-        let ph = h * 0.5;
-        let k = (c.t * 4.0).min(1.0);
-        let py = h * 0.22 + (1.0 - k) * h * 0.05;
-        panel(Rect::new(px, py, pw, ph), GOLD);
-        draw_rectangle_lines(px - 3.0, py - 3.0, pw + 6.0, ph + 6.0, 3.0, alpha(GOLD, 0.5 + 0.4 * (self.time * 5.0).sin()));
-        let ls = (ph / 13.0).min(w * 0.05);
         let cx = w / 2.0;
-        let mut y = py + ls * 1.9;
-        let t = "RETO LATERAL!";
-        text_3d_c(t, cx, y, fit_size(t, ls * 1.8, pw * 0.9), GOLD);
-        y += ls * 1.9;
-        let t = c.tech.name();
-        text_c(t, cx, y, fit_size(t, ls * 1.15, pw * 0.92), TUNNEL_C);
-        y += ls * 1.9;
-        let q = c.tech.question();
-        text_c(q, cx, y, fit_size(q, ls * 1.05, pw * 0.94), WHITE);
+        let lv = lateral::level(self.mode);
+        // El mundo lateral ocupa toda la pantalla
+        draw_rectangle(0.0, 0.0, w, h, Color::new(0.09, 0.03, 0.1, 0.9));
+        let cell = (w * 0.88 / 41.0).min(h * 0.017);
+        let ls = (w * 0.05).min(h * 0.03);
+        let est = cell * 15.5 + ls * 15.5;
+        let mut y = ((h - est) / 2.0 - h * 0.02).max(h * 0.04);
+        // "MODO" / "LATERAL": cada letra entra de lado, con desfase
+        self.letters_in("MODO", y, cell, c.t, 0.0);
+        y += cell * 8.5;
+        self.letters_in("LATERAL", y, cell, c.t, 0.2);
+        y += cell * 7.0;
+        let cy = y - cell * 3.5;
+        let chev = (cell * 1.1).max(4.0);
+        modo_lateral::chevrones(cx - cell * 22.0, cy, chev, -1.0, 2, self.time, alpha(GOLD, 0.8));
+        modo_lateral::chevrones(cx + cell * 22.0, cy, chev, 1.0, 2, self.time, alpha(GOLD, 0.8));
+        // De aqui en adelante aparece en cuanto llegan las letras
+        let f = ((c.t - 0.55) * 4.0).max(0.0).min(1.0);
         y += ls * 1.7;
-        let g = format!("Meta: {}", c.tech.goal());
-        text_c(&g, cx, y, fit_size(&g, ls * 0.9, pw * 0.94), alpha(WHITE, 0.9));
-        y += ls * 1.4;
-        let n = format!("Tienes {} piezas", c.total);
-        text_c(&n, cx, y, fit_size(&n, ls * 0.95, pw * 0.9), GOLD);
+        let t = c.tech.name();
+        text_c(t, cx, y, fit_size(t, ls * 1.2, w * 0.9), alpha(TUNNEL_C, f));
+        y += ls * 2.1;
+        let (q1, q2) = modo_lateral::dos_lineas(c.tech.question());
+        let qs = fit_size(&q1, ls * 1.7, w * 0.92).min(fit_size(&q2, ls * 1.7, w * 0.92));
+        text_c(&q1, cx, y, qs, alpha(WHITE, f));
+        y += qs * 1.15;
+        text_c(&q2, cx, y, qs, alpha(WHITE, f));
+        y += ls * 1.8;
+        let (g1, g2) = modo_lateral::dos_lineas(c.tech.goal());
+        let gs = fit_size(&g1, ls * 0.95, w * 0.92).min(fit_size(&g2, ls * 0.95, w * 0.92));
+        text_c(&g1, cx, y, gs, alpha(GOLD, f));
+        y += gs * 1.25;
+        text_c(&g2, cx, y, gs, alpha(GOLD, f));
         y += ls * 1.5;
-        if lateral::level(self.mode).hint == 0 {
-            let hint = c.tech.hint();
-            text_c(hint, cx, y, fit_size(hint, ls * 0.8, pw * 0.94), GREEN);
-        } else if lateral::level(self.mode).hint == 1 {
+        // Fichas: las piezas que tienes para lograrlo
+        let n = c.total.min(12);
+        let r = (ls * 0.3).max(3.0);
+        let gap = r * 2.7;
+        let x0 = cx - (n as f32 - 1.0) * gap / 2.0;
+        for i in 0..n {
+            draw_circle(x0 + i as f32 * gap, y, r, alpha(GOLD, f));
+            draw_circle(x0 + i as f32 * gap - r * 0.25, y - r * 0.25, r * 0.35, alpha(WHITE, 0.7 * f));
+        }
+        y += ls * 1.3;
+        let t = format!("{} PIEZAS  -  TIEMPO LENTO x{:.2}", c.total, lv.slow);
+        text_c(&t, cx, y, fit_size(&t, ls * 0.85, w * 0.9), alpha(WHITE, 0.85 * f));
+        y += ls * 1.6;
+        if lv.hint == 0 {
+            let (h1, h2) = modo_lateral::dos_lineas(c.tech.hint());
+            let hs = fit_size(&h1, ls * 0.8, w * 0.92).min(fit_size(&h2, ls * 0.8, w * 0.92));
+            text_c(&h1, cx, y, hs, alpha(GREEN, f));
+            text_c(&h2, cx, y + hs * 1.25, hs, alpha(GREEN, f));
+        } else if lv.hint == 1 {
             let t = "La pista aparecera a mitad del reto";
-            text_c(t, cx, y, fit_size(t, ls * 0.8, pw * 0.94), alpha(WHITE, 0.6));
+            text_c(t, cx, y, fit_size(t, ls * 0.8, w * 0.9), alpha(WHITE, 0.6 * f));
         } else {
             let t = "EXPERTO: sin pistas. Piensa de lado.";
-            text_c(t, cx, y, fit_size(t, ls * 0.8, pw * 0.94), alpha(MAGENTA, 0.9));
+            text_c(t, cx, y, fit_size(t, ls * 0.8, w * 0.9), alpha(MAGENTA, 0.9 * f));
         }
+        // Tiempo restante y aviso para seguir
         let p = (self.time * 3.0).sin() * 0.5 + 0.5;
         let t = "TOCA PARA EMPEZAR";
-        text_c(t, cx, py + ph - ls * 0.9, fit_size(t, ls * 1.0, pw * 0.8), alpha(GREEN, 0.55 + 0.45 * p));
+        text_c(t, cx, h * 0.955, fit_size(t, ls * 1.05, w * 0.8), alpha(GREEN, 0.55 + 0.45 * p));
+        let left = (1.0 - c.t / lateral::ANNOUNCE).max(0.0);
+        draw_rectangle(cx - w * 0.4 * left, h * 0.975, w * 0.8 * left, (h * 0.005).max(2.0), alpha(GOLD, 0.8));
+    }
+
+    /// Letras de bloques que llegan de lado, alternando el costado.
+    fn letters_in(&self, t: &str, y: f32, cell: f32, time: f32, delay: f32) {
+        let w = screen_width();
+        let n = t.chars().count();
+        let x0 = w / 2.0 - volumen::block_text_width(t, cell) / 2.0;
+        for (i, ch) in t.chars().enumerate() {
+            let q = ((time - delay - i as f32 * 0.04) / 0.32).max(0.0).min(1.0);
+            let e = 1.0 - (1.0 - q) * (1.0 - q) * (1.0 - q);
+            let lado = if i % 2 == 0 { -1.0 } else { 1.0 };
+            let cx = x0 + (i as f32 * 6.0 + 2.5) * cell + (1.0 - e) * lado * w;
+            let c = mix(GOLD, modo_lateral::CORAL, i as f32 / n.max(2) as f32);
+            volumen::block_text_c(&ch.to_string(), cx, y, cell, c);
+        }
+    }
+
+    /// Exito de un reto: el juego se congela y celebra.
+    fn draw_eureka(&self, e: &Eureka) {
+        let (w, h) = (screen_width(), screen_height());
+        let cx = w / 2.0;
+        draw_rectangle(0.0, 0.0, w, h, Color::new(0.09, 0.03, 0.1, 0.78));
+        let cell = (w * 0.9 / 47.0).min(h * 0.016);
+        let ls = (w * 0.05).min(h * 0.03);
+        let mut y = h * 0.28;
+        self.letters_in("PENSASTE", y, cell, e.t * 1.4, 0.0);
+        y += cell * 8.5;
+        self.letters_in("DE LADO", y, cell, e.t * 1.4, 0.1);
+        y += cell * 7.0 + ls * 1.8;
+        let t = format!("{} +{}", e.tech.name(), e.bonus);
+        text_c(&t, cx, y, fit_size(&t, ls * 1.2, w * 0.92), GREEN);
+        y += ls * 1.9;
+        let (a, b) = modo_lateral::dos_lineas(e.tech.lesson());
+        let s = fit_size(&a, ls, w * 0.92).min(fit_size(&b, ls, w * 0.92));
+        text_c(&a, cx, y, s, WHITE);
+        text_c(&b, cx, y + s * 1.3, s, WHITE);
+        y += s * 1.3 + ls * 1.6;
+        let t = "+1 carga de OBSERVAR";
+        text_c(t, cx, y, fit_size(t, ls * 0.85, w * 0.9), alpha(GOLD, 0.9));
+    }
+
+    /// Ecos "Y si...?": donde caeria la pieza un par de columnas a cada lado.
+    fn draw_echoes(&self, bx: f32, by: f32, s: f32) {
+        let g = &self.game;
+        let a = match g.active {
+            Some(a) if a.dx.is_none() => a,
+            _ => return,
+        };
+        let k = self.lat_k;
+        for &d in [-2, 2].iter() {
+            let x = a.x + d;
+            if !g.fits(a.spec.kind, a.rot, x, a.y) {
+                continue;
+            }
+            let gy = g.drop_y(a.spec.kind, a.rot, x, a.y);
+            let mut sum = Vec2::ZERO;
+            for &(cx, cy) in pieces::cells(a.spec.kind, a.rot).iter() {
+                let yy = gy + cy;
+                let px = bx + (x + cx) as f32 * s;
+                let py = by + (yy - HIDDEN) as f32 * s;
+                sum += vec2(px + s / 2.0, py + s / 2.0);
+                if yy >= HIDDEN {
+                    draw_rectangle_lines(px + 4.0, py + 4.0, s - 8.0, s - 8.0, 1.0, alpha(GOLD, 0.26 * k));
+                }
+            }
+            let c = sum / 4.0;
+            let p = (self.time * 2.5 + d as f32).sin() * 0.5 + 0.5;
+            text_c("?", c.x, c.y + s * 0.25, s * 0.8, alpha(GOLD, (0.14 + 0.16 * p) * k));
+        }
+    }
+
+    /// Tinte calido de la cabecera segun el mundo.
+    fn header_tint(&self, l: &Lay) {
+        let w = screen_width();
+        let k = self.lat_k;
+        draw_rectangle(0.0, 0.0, w, l.top, Color::new(0.38, 0.16, 0.05, 0.75 * k));
+        draw_line(0.0, l.top, w, l.top, 2.0, alpha(GOLD, 0.9 * k));
+    }
+
+    /// Cabecera: deja siempre claro en que modo de pensamiento estas.
+    fn draw_mode_header(&self, l: &Lay) {
+        let w = screen_width();
+        let t = self.time;
+        self.header_tint(l);
+        let cx = w / 2.0;
+        let left = w * 0.03;
+        let ms = fit_size(self.game.mode.name(), l.top * 0.24, w * 0.19);
+        if self.lat_on {
+            draw_text(self.game.mode.name(), left, l.top * 0.38, ms, alpha(WHITE, 0.85));
+            let title = "MODO LATERAL";
+            let ts = fit_size(title, l.top * 0.42, w * 0.44);
+            text_3d_c(title, cx, l.top * 0.52, ts, GOLD);
+            let half = measure_text(title, None, ts.max(1.0) as u16, 1.0).width / 2.0;
+            let chev = l.top * 0.09;
+            modo_lateral::chevrones(cx - half - chev, l.top * 0.38, chev, -1.0, 3, t, alpha(GOLD, 0.95));
+            modo_lateral::chevrones(cx + half + chev, l.top * 0.38, chev, 1.0, 3, t, alpha(GOLD, 0.95));
+            if let Some(c) = &self.challenge {
+                // Fichas: piezas que quedan
+                let n = c.left.min(12);
+                let r = (w * 0.19 / (n.max(1) as f32 * 2.7)).min(l.top * 0.08).max(1.5);
+                for i in 0..n {
+                    draw_circle(left + r + i as f32 * r * 2.6, l.top * 0.68, r, GOLD);
+                }
+                let sub = format!("{}  -  TIEMPO LENTO x{:.2}", c.tech.short(), lateral::level(self.mode).slow);
+                let ss = fit_size(&sub, l.top * 0.2, w * 0.5);
+                let p = (t * 2.0).sin() * 0.5 + 0.5;
+                text_c(&sub, cx, l.top * 0.88, ss, alpha(WHITE, 0.7 + 0.3 * p));
+            }
+        } else {
+            draw_text(self.game.mode.name(), left, l.top * 0.62, ms, alpha(MAGENTA, 0.85));
+            let title = "MODO VERTICAL";
+            let ts = fit_size(title, l.top * 0.34, w * 0.44);
+            text_3d_c(title, cx, l.top * 0.38, ts, CYAN);
+            // Medidor: se llena con cada pieza hasta saltar al modo lateral
+            let gw = w * 0.44;
+            let gx = cx - gw / 2.0;
+            let gy = l.top * 0.5;
+            let gh = (l.top * 0.11).max(3.0);
+            let total = self.next_total.max(1);
+            let k = 1.0 - self.next_ch.min(total) as f32 / total as f32;
+            draw_rectangle(gx, gy, gw, gh, Color::new(0.0, 0.0, 0.0, 0.5));
+            draw_rectangle(gx, gy, gw * k, gh, mix(CYAN, GOLD, k));
+            for i in 1..total {
+                let xx = gx + gw * i as f32 / total as f32;
+                draw_line(xx, gy, xx, gy + gh, 1.0, Color::new(0.0, 0.0, 0.05, 0.9));
+            }
+            draw_rectangle_lines(gx, gy, gw, gh, 1.0, alpha(WHITE, 0.4));
+            let sub = if self.next_ch == 1 {
+                "LATERAL EN 1 PIEZA".to_string()
+            } else {
+                format!("LATERAL EN {} PIEZAS", self.next_ch)
+            };
+            let ss = fit_size(&sub, l.top * 0.21, gw);
+            text_c(&sub, cx, l.top * 0.9, ss, alpha(GOLD, 0.95));
+        }
+    }
+
+    /// Lineas de aviso: sobre el tablero si hay sitio; si no, en una banda dentro de el.
+    fn draw_notice(&self, l: &Lay, lines: &[(&str, Color)]) {
+        let w = screen_width();
+        let fr = (l.cell * 0.3).max(4.0);
+        let n = lines.len() as f32;
+        let room = l.by - fr - l.top - l.top * 0.12;
+        let gs = (room / (n * 1.2)).min(l.cell * 0.62);
+        if gs >= l.cell * 0.36 {
+            let mut y = l.by - fr - 6.0 - (n - 1.0) * gs * 1.2;
+            for &(t, c) in lines.iter() {
+                let s = fit_size(t, gs, w * 0.95);
+                text_c(t, w / 2.0 + 1.0, y + 1.0, s, Color::new(0.0, 0.0, 0.0, 0.75 * c.a));
+                text_c(t, w / 2.0, y, s, c);
+                y += gs * 1.2;
+            }
+            return;
+        }
+        // Pantalla baja: banda en lo alto del pozo; se aparta si la pieza pasa debajo
+        let bw = l.cell * W as f32;
+        let sz = l.cell * 0.5;
+        let bh = n * sz * 1.25 + sz * 0.3;
+        let near = self.game.active.map(|a| a.y < HIDDEN + 3).unwrap_or(false);
+        let fade = if near { 0.3 } else { 1.0 };
+        draw_rectangle(l.bx, l.by, bw, bh, Color::new(0.1, 0.04, 0.1, 0.72 * fade));
+        let mut y = l.by + sz * 1.05;
+        for &(t, c) in lines.iter() {
+            let s = fit_size(t, sz, bw * 0.96);
+            text_c(t, l.bx + bw / 2.0, y, s, alpha(c, fade));
+            y += sz * 1.25;
+        }
     }
 
     /// Botonera de control con iconos dibujados (la fuente no trae flechas).
@@ -2407,9 +2678,9 @@ impl App {
             let held = self.pad_held.iter().any(|h| h.1 == i);
             let c = cols[i];
             // Al pulsar, el boton "se hunde": baja hasta su canto
-            let depth = (r.h * 0.13).max(3.0);
-            let rr = if held { Rect::new(r.x, r.y + depth * 0.8, r.w, r.h) } else { *r };
-            button(rr, "", c, true, if held { 1.0 } else { 0.0 });
+            let depth = volumen::key_depth(r.h);
+            let rr = if held { Rect::new(r.x, r.y + depth * 0.7, r.w, r.h) } else { *r };
+            button_d(rr, "", c, true, if held { 1.0 } else { 0.0 }, if held { depth * 0.3 } else { depth });
             let cx = rr.x + rr.w / 2.0;
             let cy = rr.y + rr.h / 2.0;
             let u = rr.w.min(rr.h) * 0.22;
@@ -2457,59 +2728,29 @@ impl App {
         }
     }
 
-    /// Aviso del reto lateral entre el titulo y el tablero.
+    /// Mision del reto (o leccion al terminar) junto al tablero.
     fn draw_lateral_banner(&self, l: &Lay) {
-        let w = screen_width();
-        let fr = (l.cell * 0.3).max(4.0);
-        let space = (l.by - fr - l.top).max(l.cell * 1.2);
-        let show_hint = self.hint_visible();
-        let gs = (space / if show_hint { 4.6 } else { 3.5 }).min(l.cell * 0.62);
-        let base = l.by - fr - 6.0 - if show_hint { gs * 1.15 } else { 0.0 };
-        if show_hint {
-            if let Some(c) = &self.challenge {
-                let hs = fit_size(c.tech.hint(), gs * 0.85, w * 0.96);
-                let p = (self.time * 4.0).sin() * 0.5 + 0.5;
-                text_c(c.tech.hint(), w / 2.0, base + gs * 1.15, hs, alpha(GREEN, 0.7 + 0.3 * p));
-            }
-        }
         if let Some(c) = &self.challenge {
-            let pulse = (self.time * 5.0).sin() * 0.5 + 0.5;
-            // Marco dorado alrededor del tablero mientras hay reto
-            let bw = l.cell * W as f32;
-            let bh = l.cell * (H - HIDDEN) as f32;
-            draw_rectangle_lines(l.bx - fr - 3.0, l.by - fr - 3.0, bw + 2.0 * fr + 6.0, bh + 2.0 * fr + 6.0, 3.0, alpha(GOLD, 0.35 + 0.45 * pulse));
-            let t1 = format!("RETO LATERAL: {}  ({} piezas)", c.tech.name(), c.left);
-            let s1 = fit_size(&t1, gs, w * 0.95);
-            text_c(&t1, w / 2.0 + 1.0, base - gs * 2.3 + 1.0, s1, Color::new(0.0, 0.0, 0.0, 0.7));
-            text_c(&t1, w / 2.0, base - gs * 2.3, s1, GOLD);
-            let s2 = fit_size(c.tech.question(), gs * 0.95, w * 0.95);
-            text_c(c.tech.question(), w / 2.0, base - gs * 1.15, s2, TUNNEL_C);
-            let s3 = fit_size(c.tech.goal(), gs * 0.85, w * 0.95);
-            text_c(c.tech.goal(), w / 2.0, base, s3, alpha(WHITE, 0.9));
+            if c.announcing {
+                return;
+            }
+            let mut lines = vec![(c.tech.question(), WHITE), (c.tech.goal(), GOLD)];
+            if self.hint_visible() {
+                lines.push((c.tech.hint(), GREEN));
+            }
+            self.draw_notice(l, &lines);
         } else if let Some((tech, ok, t)) = self.last_result {
+            if self.eureka.is_some() {
+                return;
+            }
             let a = (1.0 - (t - 5.5).max(0.0) / 1.5).max(0.0);
             let t1 = if ok {
                 format!("SUPERADO: {}", tech.name())
             } else {
                 format!("NO SUPERADO: {}", tech.name())
             };
-            let s1 = fit_size(&t1, gs, w * 0.95);
-            text_c(&t1, w / 2.0, base - gs * 1.2, s1, alpha(if ok { GREEN } else { MAGENTA }, a));
-            let s2 = fit_size(tech.lesson(), gs * 0.85, w * 0.95);
-            text_c(tech.lesson(), w / 2.0, base, s2, alpha(WHITE, 0.85 * a));
-        } else {
-            let t1 = format!("PENSAMIENTO LATERAL: proximo reto en {} piezas", self.next_ch);
-            let s1 = fit_size(&t1, gs * 0.95, w * 0.94);
-            text_c(&t1, w / 2.0, base - gs * 0.9, s1, alpha(GOLD, 0.85));
-            // Puntos: cuantas piezas faltan
-            let n = self.next_ch.min(10);
-            let r = (gs * 0.22).max(2.5);
-            let gap = r * 3.2;
-            let x0 = w / 2.0 - (n as f32 - 1.0) * gap / 2.0;
-            for i in 0..n {
-                let pulse = if i == 0 { (self.time * 5.0).sin() * 0.5 + 0.5 } else { 0.0 };
-                draw_circle(x0 + i as f32 * gap, base - gs * 0.25, r * (1.0 + 0.3 * pulse), alpha(GOLD, 0.5 + 0.5 * pulse));
-            }
+            let c1 = alpha(if ok { GREEN } else { MAGENTA }, a);
+            self.draw_notice(l, &[(t1.as_str(), c1), (tech.lesson(), alpha(WHITE, 0.9 * a))]);
         }
     }
 
@@ -2520,7 +2761,7 @@ impl App {
         let px = (w - pw) / 2.0;
         let ph = (h - y0 - h * 0.02).max(h * 0.2);
         panel(Rect::new(px, y0, pw, ph), GOLD);
-        let ls = (ph / 10.5).min(w * 0.045);
+        let ls = (ph / 11.8).min(w * 0.045);
         let mut y = y0 + ls * 1.4;
         let t = "ENTRENAMIENTO LATERAL";
         text_c(t, w / 2.0, y, fit_size(t, ls * 1.1, pw * 0.9), GOLD);
@@ -2560,7 +2801,7 @@ impl App {
     fn draw_puzzles(&self) {
         let (w, h) = (screen_width(), screen_height());
         let ts = fit_size("ACERTIJOS", w * 0.15, w * 0.86);
-        text_3d_c("ACERTIJOS", w / 2.0, h * 0.11, ts, GOLD);
+        block_title("ACERTIJOS", w / 2.0, h * 0.11, h * 0.08, w * 0.88, GOLD);
         let sub = "Pensamiento lateral: cada reto tiene un truco";
         let ss = fit_size(sub, ts * 0.3, w * 0.9);
         text_c(sub, w / 2.0, h * 0.11 + ts * 0.55, ss, alpha(TUNNEL_C, 0.9));
@@ -2580,14 +2821,16 @@ impl App {
             let num = format!("{}", i + 1);
             let ns = r.h * 0.5;
             text_c(&num, r.x + r.h * 0.32 + 2.0, r.y + r.h * 0.55 + 2.0, ns, Color::new(0.0, 0.0, 0.0, 0.6));
-            text_c(&num, r.x + r.h * 0.32, r.y + r.h * 0.55, ns, mix(c, WHITE, 0.5));
+            text_c(&num, r.x + r.h * 0.32, r.y + r.h * 0.55, ns, WHITE);
             let tx = r.x + r.h * 0.62;
             let tw = r.w - r.h * 0.7;
             let s1 = fit_size(p.name, r.h * 0.26, tw);
+            draw_text(p.name, tx + 1.0, r.y + r.h * 0.42 + 1.0, s1, Color::new(0.0, 0.0, 0.0, 0.8));
             draw_text(p.name, tx, r.y + r.h * 0.42, s1, WHITE);
             let info = if ok { format!("OK - {}", p.trick) } else { p.goal.text().replace("Meta: ", "") };
             let s2 = fit_size(&info, r.h * 0.17, tw);
-            draw_text(&info, tx, r.y + r.h * 0.72, s2, alpha(if ok { GREEN } else { c }, 0.9));
+            draw_text(&info, tx + 1.0, r.y + r.h * 0.72 + 1.0, s2, Color::new(0.0, 0.0, 0.0, 0.8));
+            draw_text(&info, tx, r.y + r.h * 0.72, s2, WHITE);
         }
         button(back, "VOLVER", MAGENTA, true, 0.0);
     }
@@ -2598,7 +2841,7 @@ impl App {
         let i = self.puzzle.unwrap_or(0);
         let ts = fit_size("RESUELTO!", w * 0.15, w * 0.85);
         let bounce = (self.time * 4.0).sin().abs() * ts * 0.05;
-        text_3d_c("RESUELTO!", w / 2.0, h * 0.28 - bounce, ts, GREEN);
+        block_title("RESUELTO!", w / 2.0, h * 0.28 - bounce, h * 0.09, w * 0.88, GREEN);
         let t1 = format!("Truco: {}", PUZZLES[i].trick);
         let s1 = fit_size(&t1, w * 0.055, w * 0.9);
         text_c(&t1, w / 2.0, h * 0.28 + ts * 0.9, s1, TUNNEL_C);
@@ -2616,7 +2859,7 @@ impl App {
         let (w, h) = (screen_width(), screen_height());
         let i = self.puzzle.unwrap_or(0);
         let ts = fit_size("NO FUNCIONO", w * 0.13, w * 0.85);
-        text_3d_c("NO FUNCIONO", w / 2.0, h * 0.27, ts, MAGENTA);
+        block_title("NO FUNCIONO", w / 2.0, h * 0.27, h * 0.08, w * 0.9, MAGENTA);
         let t1 = "Piensa de lado: lo obvio no es la salida";
         let s1 = fit_size(t1, w * 0.045, w * 0.9);
         text_c(t1, w / 2.0, h * 0.27 + ts * 0.9, s1, alpha(WHITE, 0.85));
@@ -2637,7 +2880,7 @@ impl App {
         let n = if self.puzzle.is_some() { 5 } else { 4 };
         let rs = overlay_rects(n);
         let ts = fit_size("PAUSA", (w * 0.16).min(h * 0.09), w * 0.8);
-        text_3d_c("PAUSA", w / 2.0, rs[0].y - ts * 0.6, ts, CYAN);
+        block_title("PAUSA", w / 2.0, rs[0].y - ts * 0.6, h * 0.09, w * 0.8, CYAN);
         let pad_label = if pad_on() { "BOTONES: SI" } else { "BOTONES: NO" };
         if self.puzzle.is_some() {
             button(rs[0], "CONTINUAR", GREEN, true, 0.0);
@@ -2658,7 +2901,7 @@ impl App {
         let (w, h) = (screen_width(), screen_height());
         let ts = fit_size("COLAPSO TOTAL", (w * 0.11).min(h * 0.06), w * 0.9);
         let ty = h * 0.1;
-        text_3d_c("COLAPSO TOTAL", w / 2.0, ty, ts, MAGENTA);
+        block_title("COLAPSO TOTAL", w / 2.0, ty, h * 0.06, w * 0.92, MAGENTA);
         let sc = format!("{}", self.game.score);
         let ss = fit_size(&sc, (w * 0.11).min(h * 0.06), w * 0.85);
         glow_text_c(&sc, w / 2.0, ty + ts * 0.6 + ss, ss, GOLD);

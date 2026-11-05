@@ -14,9 +14,10 @@ pub enum Tech {
     Invertir,
     Mirar,
     Inesperado,
+    Lado,
 }
 
-pub const ALL: [Tech; 5] = [Tech::Orden, Tech::Supuesto, Tech::Invertir, Tech::Mirar, Tech::Inesperado];
+pub const ALL: [Tech; 6] = [Tech::Orden, Tech::Supuesto, Tech::Invertir, Tech::Mirar, Tech::Inesperado, Tech::Lado];
 
 impl Tech {
     pub fn idx(self) -> usize {
@@ -26,6 +27,7 @@ impl Tech {
             Tech::Invertir => 2,
             Tech::Mirar => 3,
             Tech::Inesperado => 4,
+            Tech::Lado => 5,
         }
     }
     pub fn name(self) -> &'static str {
@@ -35,6 +37,7 @@ impl Tech {
             Tech::Invertir => "INVIERTE EL PROBLEMA",
             Tech::Mirar => "MIRA DISTINTO",
             Tech::Inesperado => "USA LO INESPERADO",
+            Tech::Lado => "ENTRA DE LADO",
         }
     }
     pub fn short(self) -> &'static str {
@@ -44,6 +47,7 @@ impl Tech {
             Tech::Invertir => "INVERTIR",
             Tech::Mirar => "MIRAR",
             Tech::Inesperado => "INESPERADO",
+            Tech::Lado => "DE LADO",
         }
     }
     /// La pregunta "Y si...?" que dispara el pensamiento lateral.
@@ -54,6 +58,7 @@ impl Tech {
             Tech::Invertir => "Y si borras lejos completando cerca?",
             Tech::Mirar => "Y si mirar cambia el resultado?",
             Tech::Inesperado => "Y si la pieza va al reves?",
+            Tech::Lado => "Y si no entras desde arriba?",
         }
     }
     /// Que hay que lograr para superar el reto.
@@ -64,6 +69,7 @@ impl Tech {
             Tech::Invertir => "Haz desaparecer bloques ENTRELAZADOS",
             Tech::Mirar => "OBSERVA la superposicion y borra linea con ella",
             Tech::Inesperado => "Borra una linea con una T, J o L boca abajo",
+            Tech::Lado => "Mete una pieza BAJO un saliente, deslizandola",
         }
     }
     /// Leccion que se muestra al fallar / en el resumen.
@@ -74,6 +80,7 @@ impl Tech {
             Tech::Invertir => "Para cambiar algo lejos, actua cerca: el enlace hace el resto.",
             Tech::Mirar => "Observar elige la copia que cae mas hondo: mira antes de soltar.",
             Tech::Inesperado => "Gira dos veces: la forma 'incorrecta' a veces encaja mejor.",
+            Tech::Lado => "El camino recto no es el unico: a veces se llega por un costado.",
         }
     }
     pub fn pieces(self) -> u32 {
@@ -83,6 +90,7 @@ impl Tech {
             Tech::Invertir => 7,
             Tech::Mirar => 3,
             Tech::Inesperado => 7,
+            Tech::Lado => 7,
         }
     }
 }
@@ -96,14 +104,16 @@ pub struct Level {
     /// 0 = pista siempre, 1 = pista a mitad del reto, 2 = nunca
     pub hint: u8,
     pub label: &'static str,
+    /// Velocidad del tiempo dentro del modo lateral (1 = normal)
+    pub slow: f32,
 }
 
 pub fn level(mode: crate::game::Mode) -> Level {
     use crate::game::Mode;
     match mode {
-        Mode::Facil => Level { extra: 2, every: (5, 7), hint: 0, label: "Retos frecuentes, con pista y piezas de sobra" },
-        Mode::Normal => Level { extra: 0, every: (6, 9), hint: 1, label: "La pista aparece a mitad del reto" },
-        Mode::Experto => Level { extra: -1, every: (4, 7), hint: 2, label: "Retos seguidos, pocas piezas y SIN pistas" },
+        Mode::Facil => Level { extra: 2, every: (5, 7), hint: 0, label: "Retos frecuentes, con pista y piezas de sobra", slow: 0.5 },
+        Mode::Normal => Level { extra: 0, every: (6, 9), hint: 1, label: "La pista aparece a mitad del reto", slow: 0.65 },
+        Mode::Experto => Level { extra: -1, every: (4, 7), hint: 2, label: "Retos seguidos, pocas piezas y SIN pistas", slow: 0.8 },
     }
 }
 
@@ -116,6 +126,7 @@ impl Tech {
             Tech::Invertir => "Pista: pon las piezas con punto en lineas que puedas completar",
             Tech::Mirar => "Pista: pulsa OBSERVAR antes de soltar la pieza doble",
             Tech::Inesperado => "Pista: gira 2 veces una T, J o L y encajala",
+            Tech::Lado => "Pista: baja junto al saliente y muevela de lado antes de fijarla",
         }
     }
     /// Que boton conviene iluminar como pista (indice en la fila de acciones o botonera).
@@ -137,7 +148,7 @@ pub enum KeyBtn {
 }
 
 /// Segundos que dura el anuncio grande de un reto (el juego espera).
-pub const ANNOUNCE: f32 = 6.0;
+pub const ANNOUNCE: f32 = 8.0;
 
 pub struct Challenge {
     pub tech: Tech,
@@ -157,7 +168,7 @@ pub struct Score {
 /// Estadisticas de entrenamiento (de la partida o de toda la sesion).
 #[derive(Clone, Copy, Default)]
 pub struct Stats {
-    pub s: [Score; 5],
+    pub s: [Score; 6],
 }
 
 impl Stats {
@@ -210,7 +221,7 @@ impl Stats {
             return 0;
         }
         let rate = ok as f32 / tried as f32;
-        let variety = self.s.iter().filter(|x| x.ok > 0).count() as f32 / 5.0;
+        let variety = self.s.iter().filter(|x| x.ok > 0).count() as f32 / 6.0;
         ((rate * 0.6 + variety * 0.4) * 100.0).round() as u32
     }
 }
@@ -223,7 +234,7 @@ pub fn pick(session: &Stats, last: Option<Tech>) -> Tech {
         return weak;
     }
     loop {
-        let t = ALL[(gen_range(0.0f32, 5.0f32) as usize).min(4)];
+        let t = ALL[(gen_range(0.0f32, 6.0f32) as usize).min(5)];
         if Some(t) != last {
             return t;
         }

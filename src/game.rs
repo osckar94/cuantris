@@ -170,6 +170,8 @@ pub enum Event {
         from_hold: bool,
         observed: bool,
         tunneled: bool,
+        /// Quedo con un bloque encima: entro de lado bajo un saliente.
+        slid: bool,
         lines: usize,
     },
 }
@@ -773,6 +775,13 @@ impl Game {
             0
         };
         let mut all_hidden = true;
+        let mut slid = false;
+        for &(cx, cy) in pieces::cells(a.spec.kind, a.rot).iter() {
+            let (x, y) = (a.x + cx, a.y + cy);
+            if !self.cur_tunneled && x >= 0 && x < W && y > 0 && y < H {
+                slid = slid || (0..y).any(|yy| self.grid[yy as usize][x as usize].kind != 0);
+            }
+        }
         for &(cx, cy) in pieces::cells(a.spec.kind, a.rot).iter() {
             let (x, y) = (a.x + cx, a.y + cy);
             if y >= 0 && y < H && x >= 0 && x < W {
@@ -795,6 +804,7 @@ impl Game {
             from_hold: self.cur_from_hold,
             observed: self.cur_observed,
             tunneled: self.cur_tunneled,
+            slid,
             lines,
         });
         if all_hidden {
