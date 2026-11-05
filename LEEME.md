@@ -25,11 +25,16 @@
 - **Los 3 niveles entrenan pensamiento lateral**: al empezar, una tarjeta explica cuándo y cómo. Cada reto
   detiene el juego con un anuncio grande. FÁCIL = retos frecuentes, +2 piezas y pista (se ilumina el botón
   clave); NORMAL = pista a mitad del reto; EXPERTO = retos seguidos, menos piezas y sin pistas.
-- **RETOS LATERALES en cada partida**: cada 5–10 piezas aparece un reto de pensamiento lateral con
-  una pregunta "¿Y si…?" y pocas piezas para lograrlo. Entrena 5 técnicas: CAMBIA EL ORDEN (guardar),
-  CUESTIONA EL SUPUESTO (túnel), INVIERTE EL PROBLEMA (entrelazado), MIRA DISTINTO (observar) y USA LO
-  INESPERADO (pieza boca abajo). El juego mete las piezas necesarias. Superarlo da puntos y una carga de
+- **MODO VERTICAL y MODO LATERAL**: juegas en MODO VERTICAL (frío, todo cae) y un medidor arriba avisa
+  cuántas piezas faltan. Cada 4–9 piezas saltas al MODO LATERAL: una ola cruza la pantalla, el mundo gira
+  90° y fluye de lado, todo pasa a oro y coral, cambia la música, el tiempo va más lento (FÁCIL x0.50,
+  NORMAL x0.65, EXPERTO x0.80) y el tablero muestra ecos "?" con otras opciones de caída.
+- **RETOS LATERALES**: cada salto trae una pregunta "¿Y si…?" y pocas piezas para lograrlo. Entrena 6
+  técnicas: CAMBIA EL ORDEN (guardar), CUESTIONA EL SUPUESTO (túnel), INVIERTE EL PROBLEMA (entrelazado),
+  MIRA DISTINTO (observar), USA LO INESPERADO (pieza boca abajo) y ENTRA DE LADO (deslizar una pieza bajo
+  un saliente). Superarlo congela el juego con "PENSASTE DE LADO", la lección, puntos y una carga de
   OBSERVAR. Al terminar ves tu perfil por técnica y un consejo; los retos insisten en tu técnica más floja.
+  Los ACERTIJOS ocurren siempre en MODO LATERAL.
 - Dificultad: FÁCIL (nivel 1), NORMAL (nivel 4), EXPERTO (nivel 8 + líneas de "ruido cuántico" que suben).
   La velocidad aumenta cada 10 líneas.
 
