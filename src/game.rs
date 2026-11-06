@@ -128,6 +128,7 @@ impl Active {
     }
 }
 
+#[derive(Clone)]
 pub enum Event {
     Move,
     Rotate,
@@ -176,6 +177,7 @@ pub enum Event {
     },
 }
 
+#[derive(Clone)]
 pub struct Game {
     pub grid: [[Cell; W as usize]; H as usize],
     pub active: Option<Active>,
@@ -257,17 +259,22 @@ impl Game {
 
     /// Crea una partida de acertijo a partir de su descripcion.
     pub fn from_puzzle(p: &crate::puzzles::Puzzle) -> Game {
+        Game::from_parts(p.rows, p.pieces, p.pending, p.charges)
+    }
+
+    /// Igual que from_puzzle pero con datos sueltos (lo usa el generador de acertijos).
+    pub fn from_parts(rows: &[&str], pieces: &[&str], pending: Option<char>, charges: u32) -> Game {
         let mut g = Game::new(Mode::Facil);
         g.puzzle = true;
         g.grid = [[Cell::default(); W as usize]; H as usize];
         g.queue.clear();
         g.active = None;
         g.events.clear();
-        g.charges = p.charges;
+        g.charges = charges;
         g.level = 1;
-        let start = H as usize - p.rows.len();
+        let start = H as usize - rows.len();
         let mut maxg = 0;
-        for (i, row) in p.rows.iter().enumerate() {
+        for (i, row) in rows.iter().enumerate() {
             for (x, ch) in row.chars().enumerate().take(W as usize) {
                 let cell = match ch {
                     '#' => Cell { kind: GARBAGE, ent: 0 },
@@ -283,8 +290,8 @@ impl Game {
             }
         }
         g.next_group = maxg;
-        g.pending_pair = p.pending.map(|c| (c.to_ascii_uppercase() as u32) - 64);
-        for s in p.pieces.iter() {
+        g.pending_pair = pending.map(|c| (c.to_ascii_uppercase() as u32) - 64);
+        for s in pieces.iter() {
             let kind = "IOTSZJL".find(s.chars().next().unwrap_or('I')).unwrap_or(0);
             let flags = &s[1..];
             g.queue.push_back(Spec {
@@ -301,6 +308,42 @@ impl Game {
     /// Piezas que faltan por jugar en un acertijo (sin contar la actual).
     pub fn remaining(&self) -> usize {
         self.queue.len() + self.hold.map(|_| 1).unwrap_or(0)
+    }
+
+    /// Piezas ya colocadas (en acertijos mide la eficiencia de la solucion).
+    pub fn pieces_used(&self) -> u32 {
+        self.locks
+    }
+
+    /// Para el verificador de acertijos: fija la pieza activa donde esta y la coloca.
+    #[allow(dead_code)]
+    pub fn place_exact(&mut self, a: Active, tunneled: bool, observed: bool) {
+        self.active = Some(a);
+        self.cur_tunneled = tunneled;
+        self.cur_observed = observed;
+        self.lock();
+    }
+
+    /// Firma del estado (tablero, piezas, guardada, cargas...) para no repetir busquedas.
+    #[allow(dead_code)]
+    pub fn sig(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for row in self.grid.iter() {
+            for c in row.iter() {
+                (c.kind, c.ent).hash(&mut h);
+            }
+        }
+        let spec = |s: &Spec| (s.kind, s.superpos, s.entangled, s.tunnel);
+        if let Some(a) = &self.active {
+            (spec(&a.spec), a.rot, a.x, a.y, a.dx).hash(&mut h);
+        }
+        for s in self.queue.iter() {
+            spec(s).hash(&mut h);
+        }
+        self.hold.as_ref().map(spec).hash(&mut h);
+        (self.hold_used, self.charges, self.pending_pair, self.next_group, self.lines).hash(&mut h);
+        h.finish()
     }
 
     pub fn board_empty(&self) -> bool {

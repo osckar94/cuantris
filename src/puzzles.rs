@@ -1,7 +1,13 @@
 //! Modo ACERTIJOS: tableros armados que exigen pensamiento lateral.
 //!
-//! Todos fueron verificados con un simulador de las mismas reglas del juego:
-//! tienen solucion y NO se pueden resolver jugando "normal" (sin el truco).
+//! Los 8 primeros estan hechos a mano. El resto (BANK) los genera y comprueba
+//! el programa de herramientas/generador con un buscador que usa las mismas
+//! reglas del juego: cada reto tiene solucion y se sabe cuantas piezas pide.
+//!
+//! Hay dos clases:
+//!   - solo lateral (dual = false): sin el truco NO se puede resolver.
+//!   - dual (dual = true): se puede resolver "a lo obvio" usando todas las
+//!     piezas (1 estrella), pero con el truco bastan `par` piezas (3 estrellas).
 //!
 //! Tablero (filas de arriba hacia abajo, pegadas al fondo):
 //!   '.' vacio, '#' bloque, 'A'..'Z' bloque entrelazado (mitad 1),
@@ -23,6 +29,10 @@ pub struct Puzzle {
     pub charges: u32,
     pub hint: &'static str,
     pub trick: &'static str,
+    /// true: tiene una salida obvia pero peor (mas piezas) y otra lateral.
+    pub dual: bool,
+    /// Piezas que pide la solucion lateral (solo importa si dual).
+    pub par: u32,
 }
 
 pub const PUZZLES: &[Puzzle] = &[
@@ -39,6 +49,8 @@ pub const PUZZLES: &[Puzzle] = &[
         charges: 0,
         hint: "Lo imposible por arriba quizas no lo sea por dentro.",
         trick: "TUNEL",
+        dual: false,
+        par: 1,
     },
     Puzzle {
         name: "Muro",
@@ -56,6 +68,8 @@ pub const PUZZLES: &[Puzzle] = &[
         charges: 0,
         hint: "Un muro no detiene a quien se pone de pie.",
         trick: "GIRAR + TUNEL",
+        dual: false,
+        par: 1,
     },
     Puzzle {
         name: "Al reves",
@@ -73,6 +87,8 @@ pub const PUZZLES: &[Puzzle] = &[
         charges: 0,
         hint: "No siempre hay que jugar la primera carta.",
         trick: "GUARDAR",
+        dual: false,
+        par: 2,
     },
     Puzzle {
         name: "El observador",
@@ -88,6 +104,8 @@ pub const PUZZLES: &[Puzzle] = &[
         charges: 1,
         hint: "Mirar cambia la realidad.",
         trick: "OBSERVAR",
+        dual: false,
+        par: 1,
     },
     Puzzle {
         name: "A distancia",
@@ -104,6 +122,8 @@ pub const PUZZLES: &[Puzzle] = &[
         charges: 0,
         hint: "Para abrir abajo, completa arriba.",
         trick: "ENTRELAZADO",
+        dual: false,
+        par: 2,
     },
     Puzzle {
         name: "La llave",
@@ -122,6 +142,8 @@ pub const PUZZLES: &[Puzzle] = &[
         charges: 0,
         hint: "La llave esta en tus manos: esa pieza esta enlazada al techo.",
         trick: "ENTRELAZADO",
+        dual: false,
+        par: 2,
     },
     Puzzle {
         name: "Reaccion en cadena",
@@ -138,6 +160,8 @@ pub const PUZZLES: &[Puzzle] = &[
         charges: 0,
         hint: "Una cosa lleva a la otra.",
         trick: "TUNEL + ENTRELAZADO",
+        dual: false,
+        par: 2,
     },
     Puzzle {
         name: "Gran final",
@@ -154,8 +178,28 @@ pub const PUZZLES: &[Puzzle] = &[
         charges: 0,
         hint: "Guarda, atraviesa y deja que el enlace haga el resto.",
         trick: "GUARDAR + TUNEL + ENTRELAZADO",
+        dual: false,
+        par: 2,
     },
 ];
+
+// Banco de retos generados y comprobados (lo escribe herramientas/generador).
+include!("puzzles_gen.rs");
+
+/// Retos totales: los 8 hechos a mano y luego el banco generado.
+pub fn total() -> usize {
+    PUZZLES.len() + BANK.len()
+}
+
+pub fn get(i: usize) -> &'static Puzzle {
+    if i < PUZZLES.len() {
+        &PUZZLES[i]
+    } else if BANK.is_empty() {
+        &PUZZLES[0]
+    } else {
+        &BANK[(i - PUZZLES.len()).min(BANK.len() - 1)]
+    }
+}
 
 impl Goal {
     pub fn text(&self) -> String {

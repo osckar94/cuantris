@@ -212,26 +212,30 @@ fn menu_rects() -> [Rect; 4] {
     ]
 }
 
-/// Tarjetas de la lista de acertijos (2 columnas) + boton VOLVER.
-fn puzzle_rects() -> (Vec<Rect>, Rect) {
+/// Tarjetas de la lista de acertijos (2 columnas), tarjeta AL AZAR y boton VOLVER.
+fn puzzle_rects() -> (Vec<Rect>, Rect, Rect) {
     let (w, h) = (screen_width(), screen_height());
     let area = (w * 0.92).min(h * 0.62);
     let x0 = (w - area) / 2.0;
     let gap = area * 0.04;
+    let g = gap * 1.2;
     let cw = (area - gap) / 2.0;
-    let ch = (h * 0.12).min(cw * 0.62);
     let y0 = h * 0.25;
+    let rows = ((PUZZLES.len() + 1) / 2) as f32;
+    // Caben las filas, la tarjeta al azar (0.85) y VOLVER (0.6) hasta el 97% de la pantalla
+    let avail = h * 0.97 - y0;
+    let ch = (cw * 0.62).min((avail - (rows + 2.0) * g) / (rows + 1.45));
     let mut v = Vec::new();
     for i in 0..PUZZLES.len() {
         let col = (i % 2) as f32;
         let row = (i / 2) as f32;
-        v.push(Rect::new(x0 + col * (cw + gap), y0 + row * (ch + gap * 1.2), cw, ch));
+        v.push(Rect::new(x0 + col * (cw + gap), y0 + row * (ch + g), cw, ch));
     }
-    let rows = ((PUZZLES.len() + 1) / 2) as f32;
-    let by = y0 + rows * (ch + gap * 1.2) + gap;
+    let ry = y0 + rows * (ch + g);
+    let rand = Rect::new(x0, ry, area, ch * 0.85);
     let bw = area * 0.6;
-    let back = Rect::new((w - bw) / 2.0, by, bw, (h * 0.065).min(bw * 0.25));
-    (v, back)
+    let back = Rect::new((w - bw) / 2.0, ry + ch * 0.85 + g, bw, ch * 0.6);
+    (v, rand, back)
 }
 
 /// Botones de fin de partida (mas arriba, para dejar sitio al resumen lateral).
@@ -377,6 +381,40 @@ fn text_3d_c(t: &str, cx: f32, y: f32, size: f32, c: Color) {
     text_c(t, cx, y, size, Color::new(0.85 + c.r * 0.15, 0.85 + c.g * 0.15, 0.85 + c.b * 0.15, c.a));
     // Reflejo superior
     text_c(t, cx - 1.0, y - 1.0, size, Color::new(1.0, 1.0, 1.0, 0.25 * c.a));
+}
+
+fn pzs(n: u32) -> String {
+    if n == 1 {
+        "1 pieza".to_string()
+    } else {
+        format!("{} piezas", n)
+    }
+}
+
+/// Estrella de cinco puntas (rellena si `on`, apagada si no).
+fn draw_star(cx: f32, cy: f32, r: f32, on: bool) {
+    let pts: Vec<Vec2> = (0..10)
+        .map(|k| {
+            let a = -PI / 2.0 + k as f32 * PI / 5.0;
+            let rr = if k % 2 == 0 { r } else { r * 0.45 };
+            vec2(cx + a.cos() * rr, cy + a.sin() * rr)
+        })
+        .collect();
+    let (face, edge) = if on {
+        (Color::new(1.0, 0.82, 0.2, 1.0), Color::new(1.0, 0.95, 0.6, 1.0))
+    } else {
+        (Color::new(0.12, 0.13, 0.2, 0.9), Color::new(0.35, 0.37, 0.5, 0.8))
+    };
+    for k in 0..10 {
+        draw_triangle(vec2(cx, cy), pts[k], pts[(k + 1) % 10], face);
+    }
+    for k in 0..10 {
+        let (a, b) = (pts[k], pts[(k + 1) % 10]);
+        draw_line(a.x, a.y, b.x, b.y, (r * 0.08).max(1.0), edge);
+    }
+    if on {
+        draw_circle(cx - r * 0.2, cy - r * 0.25, r * 0.12, Color::new(1.0, 1.0, 1.0, 0.7));
+    }
 }
 
 fn ent_mark(cx: f32, cy: f32, s: f32, t: f32) {
@@ -559,6 +597,10 @@ struct App {
     /// Acertijo en juego (indice en PUZZLES)
     puzzle: Option<usize>,
     solved: Vec<bool>,
+    /// Mejor puntuacion por acertijo: 0 sin resolver, 3 = solucion lateral, 1 = solucion obvia
+    stars: Vec<u8>,
+    last_stars: u8,
+    last_used: u32,
     show_hint: bool,
     // Entrenamiento lateral en cada partida
     challenge: Option<Challenge>,
@@ -622,7 +664,10 @@ impl App {
             sfx,
             menu_pieces,
             puzzle: None,
-            solved: vec![false; PUZZLES.len()],
+            solved: vec![false; puzzles::total()],
+            stars: vec![0; puzzles::total()],
+            last_stars: 0,
+            last_used: 0,
             show_hint: false,
             challenge: None,
             next_ch: 5,
@@ -761,19 +806,57 @@ impl App {
     }
 
     fn start_puzzle(&mut self, i: usize, hint: bool) {
-        let i = i.min(PUZZLES.len() - 1);
+        let i = i.min(puzzles::total() - 1);
         self.challenge = None;
         self.eureka = None;
         self.puzzle = Some(i);
-        self.game = Game::from_puzzle(&PUZZLES[i]);
+        self.game = Game::from_puzzle(puzzles::get(i));
         self.clear_fx();
         self.show_hint = hint;
         self.new_best = false;
         self.sfx.play(S::Click, 0.5);
         self.set_state(State::Playing);
         let l = lay();
-        let name = format!("ACERTIJO {}", i + 1);
+        let name = if i < PUZZLES.len() {
+            format!("ACERTIJO {}", i + 1)
+        } else {
+            format!("AL AZAR {}", i - PUZZLES.len() + 1)
+        };
         self.popup(&l, &name, GOLD, true);
+    }
+
+    /// Un acertijo del banco generado: de los que aun no resolviste, los mas faciles primero.
+    fn start_random(&mut self) {
+        let base = PUZZLES.len();
+        let end = puzzles::total();
+        if end <= base {
+            self.set_state(State::Puzzles);
+            return;
+        }
+        let cur = self.puzzle;
+        let mut pool: Vec<usize> = (base..end).filter(|&i| self.stars[i] == 0 && Some(i) != cur).collect();
+        pool.truncate(6);
+        if pool.is_empty() {
+            pool = (base..end).filter(|&i| Some(i) != cur).collect();
+        }
+        if pool.is_empty() {
+            pool.push(base);
+        }
+        let k = game::rand_int(pool.len() as i32) as usize;
+        self.start_puzzle(pool[k], false);
+    }
+
+    /// Despues de resolver: el siguiente de la lista o uno al azar.
+    fn pz_next(&mut self, i: usize) {
+        if i < PUZZLES.len() {
+            if i + 1 < PUZZLES.len() {
+                self.start_puzzle(i + 1, false);
+            } else {
+                self.set_state(State::Puzzles);
+            }
+        } else {
+            self.start_random();
+        }
     }
 
     /// Revisa si el acertijo se resolvio o se acabaron las piezas.
@@ -785,7 +868,7 @@ impl App {
         if self.state != State::Playing {
             return;
         }
-        let done = match PUZZLES[i].goal {
+        let done = match puzzles::get(i).goal {
             Goal::ClearAll => self.game.board_empty(),
             Goal::Lines(n) => self.game.lines >= n,
         };
@@ -794,6 +877,13 @@ impl App {
             self.popups.clear();
         }
         if done {
+            // Tres estrellas con la solucion lateral; una si resolviste "a lo obvio" con mas piezas.
+            let p = puzzles::get(i);
+            let used = self.game.pieces_used();
+            let stars = if p.dual && used > p.par { 1 } else { 3 };
+            self.last_stars = stars;
+            self.last_used = used;
+            self.stars[i] = self.stars[i].max(stars);
             self.solved[i] = true;
             self.sfx.play(S::Tetra, 0.7);
             let l = lay();
@@ -1330,11 +1420,15 @@ impl App {
     }
 
     fn update_puzzles(&mut self, ptrs: &[Ptr], l: &Lay) {
-        let (cards, back) = puzzle_rects();
+        let (cards, rand, back) = puzzle_rects();
         for p in ptrs {
             if let Ptr::Down(_, pos) = *p {
                 if self.sound_hit(pos, l) {
                     continue;
+                }
+                if rand.contains(pos) {
+                    self.start_random();
+                    return;
                 }
                 for (i, r) in cards.iter().enumerate() {
                     if r.contains(pos) {
@@ -1355,22 +1449,25 @@ impl App {
     }
 
     fn update_pzwin(&mut self, ptrs: &[Ptr], l: &Lay) {
-        let rs = overlay_rects(2);
+        // Con una estrella hay un boton mas: BUSCAR LA LATERAL (volver a intentarlo)
+        let retry = self.last_stars < 3;
+        let rs = overlay_rects(if retry { 3 } else { 2 });
+        let (b_next, b_list) = if retry { (1, 2) } else { (0, 1) };
         let i = self.puzzle.unwrap_or(0);
         for p in ptrs {
             if let Ptr::Down(_, pos) = *p {
                 if self.sound_hit(pos, l) {
                     continue;
                 }
-                if rs[0].contains(pos) {
-                    if i + 1 < PUZZLES.len() {
-                        self.start_puzzle(i + 1, false);
-                    } else {
-                        self.set_state(State::Puzzles);
-                    }
+                if retry && rs[0].contains(pos) {
+                    self.start_puzzle(i, false);
                     return;
                 }
-                if rs[1].contains(pos) {
+                if rs[b_next].contains(pos) {
+                    self.pz_next(i);
+                    return;
+                }
+                if rs[b_list].contains(pos) {
                     self.sfx.play(S::Click, 0.5);
                     self.set_state(State::Puzzles);
                     return;
@@ -1378,7 +1475,7 @@ impl App {
             }
         }
         if is_key_pressed(KeyCode::Enter) {
-            self.start_puzzle(i + 1, false);
+            self.pz_next(i);
         }
     }
 
@@ -1855,10 +1952,14 @@ impl App {
         draw_line(0.0, l.top, w, l.top, 2.0, alpha(CYAN, 0.6));
         if let Some(i) = self.puzzle {
             self.header_tint(l);
-            let p = &PUZZLES[i];
+            let p = puzzles::get(i);
             let ts = fit_size(p.name, l.top * 0.5, w * 0.62);
             text_3d_c(p.name, w / 2.0, l.top * 0.7, ts, GOLD);
-            let tag = format!("RETO {}/{}", i + 1, PUZZLES.len());
+            let tag = if i < PUZZLES.len() {
+                format!("RETO {}/{}", i + 1, PUZZLES.len())
+            } else {
+                "AL AZAR".to_string()
+            };
             let ms = fit_size(&tag, l.top * 0.26, w * 0.17);
             draw_text(&tag, w * 0.03, l.top * 0.5, ms, alpha(TUNNEL_C, 0.85));
             let mo = fit_size("LATERAL", l.top * 0.22, w * 0.17);
@@ -1868,7 +1969,11 @@ impl App {
             let space = (l.by - fr - l.top).max(l.cell * 1.2);
             let lines_n = if self.show_hint { 2.6 } else { 1.4 };
             let gs = (space / lines_n).min(l.cell * 0.7);
-            let goal = p.goal.text();
+            let mut goal = p.goal.text();
+            if p.dual {
+                // Hay una salida obvia y otra lateral que gasta menos piezas
+                goal = format!("{} - 3 estrellas con {} pzs", goal, p.par);
+            }
             let gsz = fit_size(&goal, gs, w * 0.94);
             let mut y = l.by - fr - 6.0 - if self.show_hint { gs * 1.2 } else { 0.0 };
             text_c(&goal, w / 2.0 + 1.0, y + 1.0, gsz, Color::new(0.0, 0.0, 0.0, 0.7));
@@ -2209,14 +2314,14 @@ impl App {
         y += s * 2.2 + s * 0.45;
         let stats = if let Some(i) = self.puzzle {
             let left = g.remaining() + g.active.map(|_| 1).unwrap_or(0);
-            let goal = match PUZZLES[i].goal {
+            let goal = match puzzles::get(i).goal {
                 Goal::Lines(n) => format!("{}/{}", g.lines.min(n), n),
                 Goal::ClearAll => {
                     let n = g.grid.iter().flatten().filter(|c| c.kind != 0).count();
                     format!("{}", n)
                 }
             };
-            let gl = match PUZZLES[i].goal {
+            let gl = match puzzles::get(i).goal {
                 Goal::Lines(_) => "LINEAS",
                 Goal::ClearAll => "BLOQUES",
             };
@@ -2808,13 +2913,13 @@ impl App {
         let sub2 = "Sin gravedad: piensa con calma";
         let ss2 = fit_size(sub2, ss, w * 0.9);
         text_c(sub2, w / 2.0, h * 0.11 + ts * 0.55 + ss * 1.5, ss2, alpha(WHITE, 0.6));
-        let (cards, back) = puzzle_rects();
-        let n_ok = self.solved.iter().filter(|s| **s).count();
+        let (cards, rand, back) = puzzle_rects();
+        let n_ok = self.solved.iter().take(PUZZLES.len()).filter(|s| **s).count();
         let prog = format!("Resueltos: {} / {}", n_ok, PUZZLES.len());
         let ps = fit_size(&prog, ss, w * 0.6);
         text_c(&prog, w / 2.0, cards[0].y - ps * 0.7, ps, alpha(GOLD, 0.9));
         for (i, r) in cards.iter().enumerate() {
-            let p = &PUZZLES[i];
+            let p = puzzles::get(i);
             let ok = self.solved[i];
             let c = if ok { GREEN } else { [CYAN, VIOLET, MAGENTA, GOLD][i % 4] };
             button(*r, "", c, true, 0.0);
@@ -2831,7 +2936,28 @@ impl App {
             let s2 = fit_size(&info, r.h * 0.17, tw);
             draw_text(&info, tx + 1.0, r.y + r.h * 0.72 + 1.0, s2, Color::new(0.0, 0.0, 0.0, 0.8));
             draw_text(&info, tx, r.y + r.h * 0.72, s2, WHITE);
+            if ok {
+                let sr = r.h * 0.09;
+                for k in 0..3 {
+                    draw_star(r.x + r.w - sr * 1.6 - (2 - k) as f32 * sr * 2.4, r.y + r.h * 0.2, sr, (k as u8) < self.stars[i]);
+                }
+            }
         }
+        // Tarjeta AL AZAR: retos nuevos del banco, siempre con solucion comprobada
+        let bank = puzzles::total() - PUZZLES.len();
+        let total_stars: u32 = self.stars.iter().skip(PUZZLES.len()).map(|s| *s as u32).sum();
+        let pulse = ((self.time * 2.0).sin() * 0.5 + 0.5) * 0.6;
+        button(rand, "", VIOLET, bank > 0, pulse);
+        let rs1 = fit_size("ACERTIJO AL AZAR", rand.h * 0.34, rand.w * 0.8);
+        text_c("ACERTIJO AL AZAR", rand.x + rand.w / 2.0 + 1.0, rand.y + rand.h * 0.42 + 1.0, rs1, Color::new(0.0, 0.0, 0.0, 0.8));
+        text_c("ACERTIJO AL AZAR", rand.x + rand.w / 2.0, rand.y + rand.h * 0.42, rs1, WHITE);
+        let sub = if bank > 0 {
+            format!("{} retos comprobados - 3 estrellas = solucion lateral ({})", bank, total_stars)
+        } else {
+            "Pronto habra mas retos".to_string()
+        };
+        let rs2 = fit_size(&sub, rand.h * 0.2, rand.w * 0.94);
+        text_c(&sub, rand.x + rand.w / 2.0, rand.y + rand.h * 0.77, rs2, alpha(WHITE, 0.9));
         button(back, "VOLVER", MAGENTA, true, 0.0);
     }
 
@@ -2842,16 +2968,54 @@ impl App {
         let ts = fit_size("RESUELTO!", w * 0.15, w * 0.85);
         let bounce = (self.time * 4.0).sin().abs() * ts * 0.05;
         block_title("RESUELTO!", w / 2.0, h * 0.28 - bounce, h * 0.09, w * 0.88, GREEN);
-        let t1 = format!("Truco: {}", PUZZLES[i].trick);
-        let s1 = fit_size(&t1, w * 0.055, w * 0.9);
-        text_c(&t1, w / 2.0, h * 0.28 + ts * 0.9, s1, TUNNEL_C);
-        let t2 = "Pensaste de lado. Bien hecho.";
-        let s2 = fit_size(t2, s1 * 0.85, w * 0.9);
-        text_c(t2, w / 2.0, h * 0.28 + ts * 0.9 + s1 * 1.6, s2, alpha(WHITE, 0.8));
-        let rs = overlay_rects(2);
-        let next = if i + 1 < PUZZLES.len() { "SIGUIENTE" } else { "VER TODOS" };
-        button(rs[0], next, GREEN, true, (self.time * 4.0).sin() * 0.5 + 0.5);
-        button(rs[1], "ACERTIJOS", GOLD, true, 0.0);
+        let p = puzzles::get(i);
+        // Estrellas: 3 por la solucion lateral, 1 por la obvia
+        let sr = (h * 0.035).min(w * 0.07);
+        let sy = h * 0.28 + ts * 0.9 + sr * 0.2;
+        for k in 0..3 {
+            let pop = ((self.time * 3.0 - k as f32 * 0.5).max(0.0)).min(1.0);
+            draw_star(w / 2.0 + (k as f32 - 1.0) * sr * 2.6, sy, sr * (0.6 + 0.4 * pop), (k as u8) < self.last_stars);
+        }
+        let mut y = sy + sr * 1.9;
+        let s1 = fit_size("Resuelto con 99 piezas. Hay un camino con 99 piezas.", w * 0.045, w * 0.92);
+        let lines: Vec<(String, Color)> = if self.last_stars >= 3 {
+            let a = if p.dual {
+                format!("SOLUCION LATERAL con {}", pzs(self.last_used))
+            } else {
+                "SOLUCION LATERAL".to_string()
+            };
+            vec![
+                (a, GOLD),
+                (format!("Truco: {}", p.trick), TUNNEL_C),
+                ("Pensaste de lado. Bien hecho.".to_string(), alpha(WHITE, 0.8)),
+            ]
+        } else {
+            vec![
+                (format!("Resuelto a lo obvio con {}.", pzs(self.last_used)), WHITE),
+                (format!("Hay un camino lateral con solo {}.", pzs(p.par)), GOLD),
+                (format!("Pista: {}", p.hint), TUNNEL_C),
+            ]
+        };
+        for (t, c) in lines.iter() {
+            text_c(t, w / 2.0, y, fit_size(t, s1, w * 0.92), *c);
+            y += s1 * 1.5;
+        }
+        let retry = self.last_stars < 3;
+        let rs = overlay_rects(if retry { 3 } else { 2 });
+        let next = if i < PUZZLES.len() {
+            if i + 1 < PUZZLES.len() { "SIGUIENTE" } else { "VER TODOS" }
+        } else {
+            "OTRO AL AZAR"
+        };
+        let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
+        if retry {
+            button(rs[0], "BUSCAR LA LATERAL", GOLD, true, pulse);
+            button(rs[1], next, GREEN, true, 0.0);
+            button(rs[2], "ACERTIJOS", MAGENTA, true, 0.0);
+        } else {
+            button(rs[0], next, GREEN, true, pulse);
+            button(rs[1], "ACERTIJOS", GOLD, true, 0.0);
+        }
     }
 
     fn draw_pzfail(&self) {
@@ -2864,7 +3028,7 @@ impl App {
         let s1 = fit_size(t1, w * 0.045, w * 0.9);
         text_c(t1, w / 2.0, h * 0.27 + ts * 0.9, s1, alpha(WHITE, 0.85));
         if self.show_hint {
-            let hint = format!("Pista: {}", PUZZLES[i].hint);
+            let hint = format!("Pista: {}", puzzles::get(i).hint);
             let s2 = fit_size(&hint, s1, w * 0.92);
             text_c(&hint, w / 2.0, h * 0.27 + ts * 0.9 + s1 * 1.8, s2, GOLD);
         }
