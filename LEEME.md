@@ -22,6 +22,16 @@
   ("deja el tablero vacío" o "borra N líneas"). Sin gravedad: piensa con calma. Jugando "normal" son
   imposibles; cada uno exige un truco (túnel, entrelazado, guardar, observar…). Botón OPCIONES → PISTA.
   Todos están verificados por computadora: tienen solución y no se resuelven sin su truco.
+- **ACERTIJO AL AZAR (nuevo)**: un banco de retos generados por un programa que juega con las mismas
+  reglas del juego (`herramientas/generador`). Cada reto se comprobó con una búsqueda completa: se sabe si
+  tiene solución, cuántas piezas pide y qué truco exige. Salen primero los que aún no resolviste.
+- **DOS SOLUCIONES (nuevo)**: algunos retos se pueden resolver "a lo obvio" usando todas las piezas
+  (★ una estrella), pero con el truco bastan menos piezas (★★★ tres estrellas = solución lateral). El
+  reto avisa cuántas piezas pide la solución lateral. Si te quedas con una estrella, puedes
+  "BUSCAR LA LATERAL" y reintentar. Los retos "solo lateral" (sin truco no hay salida) dan siempre ★★★.
+- Para regenerar el banco: `cd herramientas/generador` y
+  `cargo run --release -- generar 120 12 300` (cuántos, hilos, segundos). Escribe `src/puzzles_gen.rs`.
+  `cargo run --release -- validar` revisa todos los retos con la búsqueda completa.
 - **Los 3 niveles entrenan pensamiento lateral**: al empezar, una tarjeta explica cuándo y cómo. Cada reto
   detiene el juego con un anuncio grande. FÁCIL = retos frecuentes, +2 piezas y pista (se ilumina el botón
   clave); NORMAL = pista a mitad del reto; EXPERTO = retos seguidos, menos piezas y sin pistas.
