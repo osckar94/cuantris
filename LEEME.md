@@ -1,5 +1,30 @@
 # CUANTRIS — bloques cuánticos para tu celular (Rust + macroquad)
 
+## Los dos mundos (versión actual)
+El juego tiene dos mundos puros. Se elige uno en el menú.
+
+**MUNDO CUÁNTICO** — las piezas caen y cada nivel abre un concepto. Subes de nivel borrando líneas
+(la barra de arriba dice cuántas faltan). La primera vez que aparece cada concepto, el juego se detiene
+y lo explica con un dibujo.
+1. SUPERPOSICIÓN: la pieza está en 2 lugares; OBSERVAR elige la copia que cae más hondo.
+2. EFECTO TÚNEL: la pieza con flecha atraviesa bloques.
+3. ENTRELAZAMIENTO: piezas gemelas; borras una y desaparece la otra.
+4. DIMENSIONES: el pozo existe en dos dimensiones (A y B). Juegas en una y la otra se ve como holograma.
+   Los hologramas no chocan con tu pieza, pero una fila se borra si entre las dos dimensiones la llenan.
+   El botón DIMENSIÓN (o la tecla D) salta de una a otra: un hueco tapado aquí está abierto allá.
+5. SUPERCUÁNTICO: todo junto y cada vez más rápido.
+
+**MUNDO LATERAL** — 100 niveles sin piezas cuánticas, comprobados por el generador. Reglas:
+sin reloj (nada cae solo), piezas contadas, una meta escrita sobre el tablero, y lo obvio no basta:
+hay que guardar, girar o entrar de lado bajo un saliente. Menos piezas = 3 estrellas. Cada nivel
+resuelto abre el siguiente. El botón PISTA da una pista.
+
+Los niveles laterales se regeneran con `cargo run --release -- generar 100 10 150 puro` en
+`herramientas/generador`. El progreso no se guarda al cerrar el juego.
+
+Las secciones de abajo describen versiones anteriores (modos FÁCIL/NORMAL/EXPERTO y acertijos con
+piezas cuánticas), que ya no están en el menú.
+
 ## Cómo jugar
 - **¿Qué son las ondas?** Onda entre DOS copias de una pieza = SUPERPOSICIÓN (está en 2 sitios; pulsa
   OBSERVAR para quedarte con la que cae más hondo). Onda violeta entre bloques con punto = ENTRELAZADAS
