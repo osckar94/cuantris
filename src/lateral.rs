@@ -103,6 +103,7 @@ pub struct Level {
     pub every: (u32, u32),
     /// 0 = pista siempre, 1 = pista a mitad del reto, 2 = nunca
     pub hint: u8,
+    #[allow(dead_code)]
     pub label: &'static str,
     /// Velocidad del tiempo dentro del modo lateral (1 = normal)
     pub slow: f32,

@@ -139,6 +139,12 @@ pub enum Event {
     Garbage,
     GameOver,
     Perfect,
+    /// Se abrieron las dimensiones cuanticas.
+    DimOpen,
+    /// Salto a la otra dimension.
+    DimSwitch,
+    /// La pieza no cabe en la otra dimension.
+    DimBlocked,
     LevelUp(u32),
     Combo(i32),
     Clear {
@@ -209,6 +215,42 @@ pub struct Game {
     cur_from_hold: bool,
     cur_observed: bool,
     cur_tunneled: bool,
+    /// Mundo cuantico puro: niveles que abren un concepto cuantico cada uno.
+    pub quantum: bool,
+    /// Dimensiones cuanticas abiertas: el pozo existe en dos dimensiones a la vez.
+    pub dims: bool,
+    /// Dimension visible (0 = A, 1 = B). `grid` es siempre la visible.
+    pub dim: u8,
+    /// Bloques de la otra dimension (no chocan con la pieza, pero completan lineas).
+    pub other: [[Cell; W as usize]; H as usize],
+}
+
+/// Lineas totales necesarias para llegar a cada nivel cuantico (2, 3, 4, 5).
+const Q_GOALS: [u32; 4] = [3, 7, 11, 16];
+
+/// Nivel cuantico que corresponde a un total de lineas.
+pub fn qlevel_for(lines: u32) -> u32 {
+    let mut lv = 1;
+    for g in Q_GOALS.iter() {
+        if lines >= *g {
+            lv += 1;
+        }
+    }
+    if lines >= Q_GOALS[3] {
+        lv += (lines - Q_GOALS[3]) / 6;
+    }
+    lv
+}
+
+/// Nombre del concepto que abre cada nivel cuantico.
+pub fn qlevel_name(lv: u32) -> &'static str {
+    match lv {
+        0 | 1 => "SUPERPOSICION",
+        2 => "EFECTO TUNEL",
+        3 => "ENTRELAZAMIENTO",
+        4 => "DIMENSIONES",
+        _ => "SUPERCUANTICO",
+    }
 }
 
 impl Game {
@@ -242,6 +284,10 @@ impl Game {
             cur_from_hold: false,
             cur_observed: false,
             cur_tunneled: false,
+            quantum: false,
+            dims: false,
+            dim: 0,
+            other: [[Cell::default(); W as usize]; H as usize],
         };
         for i in 0..5 {
             let s = g.gen_spec(i < 2);
@@ -255,6 +301,104 @@ impl Game {
         }
         g.spawn_next();
         g
+    }
+
+    /// Partida del MUNDO CUANTICO: empieza en el nivel 1 (superposicion).
+    pub fn new_quantum() -> Game {
+        let mut g = Game::new(Mode::Facil);
+        g.quantum = true;
+        g.level = 1;
+        g.charges = 3;
+        g.queue.clear();
+        g.active = None;
+        g.events.clear();
+        for _ in 0..5 {
+            let s = g.gen_spec(true);
+            g.queue.push_back(s);
+        }
+        // La segunda pieza ya llega en superposicion: el concepto del nivel 1.
+        if let Some(s) = g.queue.get_mut(1) {
+            s.superpos = true;
+        }
+        g.spawn_next();
+        g
+    }
+
+    /// Lineas hechas y lineas que pide el siguiente nivel cuantico.
+    pub fn q_progress(&self) -> (u32, u32) {
+        let mut prev = 0;
+        for g in Q_GOALS.iter() {
+            if self.lines < *g {
+                return (self.lines - prev, *g - prev);
+            }
+            prev = *g;
+        }
+        ((self.lines - prev) % 6, 6)
+    }
+
+    /// Salta a la otra dimension si la pieza cabe alli. Devuelve si pudo.
+    pub fn switch_dim(&mut self) -> bool {
+        if !self.dims || self.over {
+            return false;
+        }
+        std::mem::swap(&mut self.grid, &mut self.other);
+        let ok = match self.active {
+            Some(a) => self.active_fits(&a),
+            None => true,
+        };
+        if !ok {
+            std::mem::swap(&mut self.grid, &mut self.other);
+            self.events.push(Event::DimBlocked);
+            return false;
+        }
+        self.dim ^= 1;
+        self.lock_t = 0.0;
+        self.events.push(Event::DimSwitch);
+        true
+    }
+
+    /// Al subir de nivel cuantico: abre dimensiones y trae ya la pieza del concepto nuevo.
+    fn on_qlevel(&mut self) {
+        if self.level >= 4 && !self.dims {
+            self.dims = true;
+            self.events.push(Event::DimOpen);
+        }
+        let plain = Spec {
+            kind: 0,
+            superpos: false,
+            entangled: false,
+            tunnel: false,
+        };
+        match self.level {
+            2 => {
+                if let Some(s) = self.queue.get_mut(0) {
+                    *s = Spec { kind: s.kind, tunnel: true, ..plain };
+                }
+            }
+            3 => {
+                for i in 0..2 {
+                    if let Some(s) = self.queue.get_mut(i) {
+                        *s = Spec { kind: s.kind, entangled: true, ..plain };
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Solo para pruebas en escritorio: sube un nivel cuantico.
+    pub fn debug_level_up(&mut self) {
+        if !self.quantum {
+            return;
+        }
+        let mut l = self.lines + 1;
+        while qlevel_for(l) == self.level {
+            l += 1;
+        }
+        self.lines = l;
+        self.level = qlevel_for(l);
+        self.events.push(Event::LevelUp(self.level));
+        self.on_qlevel();
     }
 
     /// Crea una partida de acertijo a partir de su descripcion.
@@ -408,10 +552,25 @@ impl Game {
             };
         }
         let lvl = self.level as f32;
-        let p = (self.mode.superpos_base() + (lvl - 1.0) * 0.015).min(self.mode.superpos_cap());
+        // (superposicion, entrelazada, tunel): en el mundo cuantico cada nivel abre un concepto
+        let (p, pe, pt) = if self.quantum {
+            match self.level {
+                0 | 1 => (0.30, 0.0, 0.0),
+                2 => (0.15, 0.0, 0.30),
+                3 => (0.15, 0.30, 0.18),
+                4 => (0.15, 0.22, 0.15),
+                _ => (0.22, 0.28, 0.20),
+            }
+        } else {
+            (
+                (self.mode.superpos_base() + (lvl - 1.0) * 0.015).min(self.mode.superpos_cap()),
+                self.mode.entangle_prob(),
+                self.mode.tunnel_prob(),
+            )
+        };
         let superpos = gen_range(0.0f32, 1.0f32) < p;
-        let entangled = !superpos && gen_range(0.0f32, 1.0f32) < self.mode.entangle_prob();
-        let tunnel = !superpos && !entangled && gen_range(0.0f32, 1.0f32) < self.mode.tunnel_prob();
+        let entangled = !superpos && gen_range(0.0f32, 1.0f32) < pe;
+        let tunnel = !superpos && !entangled && gen_range(0.0f32, 1.0f32) < pt;
         Spec {
             kind,
             superpos,
@@ -517,6 +676,20 @@ impl Game {
         }
         if !self.active_fits(&a) {
             a.y -= 1;
+            // Con dimensiones abiertas, si aqui no cabe la pieza escapa a la otra dimension.
+            if !self.active_fits(&a) && self.dims {
+                std::mem::swap(&mut self.grid, &mut self.other);
+                let b = Active { y: a.y + 1, ..a };
+                if self.active_fits(&b) || self.active_fits(&a) {
+                    if self.active_fits(&b) {
+                        a = b;
+                    }
+                    self.dim ^= 1;
+                    self.events.push(Event::DimSwitch);
+                } else {
+                    std::mem::swap(&mut self.grid, &mut self.other);
+                }
+            }
             if !self.active_fits(&a) {
                 self.active = None;
                 self.over = true;
@@ -864,8 +1037,15 @@ impl Game {
     }
 
     fn clear_lines(&mut self) -> usize {
+        // Interferencia: con dimensiones abiertas una fila se completa sumando las dos.
+        let dims = self.dims;
         let full: Vec<i32> = (0..H)
-            .filter(|&y| (0..W).all(|x| self.grid[y as usize][x as usize].kind != 0))
+            .filter(|&y| {
+                (0..W).all(|x| {
+                    self.grid[y as usize][x as usize].kind != 0
+                        || (dims && self.other[y as usize][x as usize].kind != 0)
+                })
+            })
             .collect();
         let n = full.len();
         if n == 0 {
@@ -876,25 +1056,37 @@ impl Game {
         let mut groups: Vec<u32> = Vec::new();
         for &y in &full {
             for x in 0..W {
-                let c = self.grid[y as usize][x as usize];
+                let mut c = self.grid[y as usize][x as usize];
+                let o = self.other[y as usize][x as usize];
+                if o.ent != 0 && !groups.contains(&(o.ent / 2)) {
+                    groups.push(o.ent / 2);
+                }
+                if c.kind == 0 {
+                    c = o;
+                }
                 cells.push((x, y, c.kind));
                 if c.ent != 0 && !groups.contains(&(c.ent / 2)) {
                     groups.push(c.ent / 2);
                 }
             }
         }
-        let mut new_grid = [[Cell::default(); W as usize]; H as usize];
-        let mut dst = H - 1;
-        for y in (0..H).rev() {
-            if full.contains(&y) {
-                continue;
+        let compact = |g: &[[Cell; W as usize]; H as usize]| {
+            let mut ng = [[Cell::default(); W as usize]; H as usize];
+            let mut dst = H - 1;
+            for y in (0..H).rev() {
+                if full.contains(&y) {
+                    continue;
+                }
+                ng[dst as usize] = g[y as usize];
+                dst -= 1;
             }
-            new_grid[dst as usize] = self.grid[y as usize];
-            dst -= 1;
-        }
-        self.grid = new_grid;
+            ng
+        };
+        self.grid = compact(&self.grid);
+        self.other = compact(&self.other);
 
-        // Accion fantasmal a distancia: los bloques entrelazados desaparecen juntos.
+        // Accion fantasmal a distancia: los bloques entrelazados desaparecen juntos
+        // (tambien los que estan en la otra dimension).
         let mut ent_cells = Vec::new();
         if !groups.is_empty() {
             for y in 0..H {
@@ -903,6 +1095,11 @@ impl Game {
                     if c.ent != 0 && groups.contains(&(c.ent / 2)) {
                         ent_cells.push((x, y, c.kind));
                         self.grid[y as usize][x as usize] = Cell::default();
+                    }
+                    let o = self.other[y as usize][x as usize];
+                    if o.ent != 0 && groups.contains(&(o.ent / 2)) {
+                        ent_cells.push((x, y, o.kind));
+                        self.other[y as usize][x as usize] = Cell::default();
                     }
                 }
             }
@@ -926,7 +1123,8 @@ impl Game {
             self.events.push(Event::Combo(self.combo));
         }
         pts += 25 * ent_cells.len() as u64 * lvl;
-        let empty = self.grid.iter().all(|r| r.iter().all(|c| c.kind == 0));
+        let empty = self.grid.iter().all(|r| r.iter().all(|c| c.kind == 0))
+            && self.other.iter().all(|r| r.iter().all(|c| c.kind == 0));
         if empty {
             pts += 2000 * lvl;
             self.events.push(Event::Perfect);
@@ -943,10 +1141,17 @@ impl Game {
         }
         let old = self.level;
         self.lines += n as u32;
-        self.level = self.mode.start_level() + self.lines / 10;
+        self.level = if self.quantum {
+            qlevel_for(self.lines)
+        } else {
+            self.mode.start_level() + self.lines / 10
+        };
         if self.level > old {
             self.charges = (self.charges + 1).min(9);
             self.events.push(Event::LevelUp(self.level));
+            if self.quantum {
+                self.on_qlevel();
+            }
         }
         if tetra {
             self.charges = (self.charges + 1).min(9);

@@ -7,7 +7,7 @@ mod sfx;
 mod volumen;
 
 use lateral::{Challenge, Stats, Tech};
-use puzzles::{Goal, PUZZLES};
+use puzzles::Goal;
 
 use game::{Event, Game, Mode, Spec, H, HIDDEN, W};
 use macroquad::prelude::*;
@@ -130,6 +130,8 @@ struct Lay {
     sw: f32,
     top: f32,
     buttons: [Rect; 3],
+    /// Boton DIMENSION (solo en el mundo cuantico).
+    dim: Option<Rect>,
     /// Botonera: izquierda, derecha, girar izq, girar der, bajar, caida total.
     pad: Option<[Rect; 6]>,
     sound: Rect,
@@ -137,6 +139,12 @@ struct Lay {
 
 /// Mostrar botonera en pantalla (se cambia desde PAUSA).
 static PAD_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Fila de acciones con cuatro botones (mundo cuantico) en vez de tres.
+static FOUR_BTN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Los retos laterales ya no interrumpen la partida: cada mundo es puro.
+const RETOS_EN_PARTIDA: bool = false;
 
 fn pad_on() -> bool {
     PAD_ON.load(std::sync::atomic::Ordering::Relaxed)
@@ -176,12 +184,16 @@ fn lay() -> Lay {
         let bh = bot * 0.72;
         (bh, h - bot + (bot - bh) / 2.0 - h * 0.012, None)
     };
-    let bwid = (area - pad * 4.0) / 3.0;
-    let buttons = [
-        Rect::new(ax + pad, byb, bwid, bh),
-        Rect::new(ax + pad * 2.0 + bwid, byb, bwid, bh),
-        Rect::new(ax + pad * 3.0 + bwid * 2.0, byb, bwid, bh),
-    ];
+    // En el mundo cuantico hay un cuarto boton: DIMENSION (entre OBSERVAR y PAUSA)
+    let four = FOUR_BTN.load(std::sync::atomic::Ordering::Relaxed);
+    let nb = if four { 4.0 } else { 3.0 };
+    let bwid = (area - pad * (nb + 1.0)) / nb;
+    let slot = |i: f32| Rect::new(ax + pad + i * (bwid + pad), byb, bwid, bh);
+    let (buttons, dim) = if four {
+        ([slot(0.0), slot(1.0), slot(3.0)], Some(slot(2.0)))
+    } else {
+        ([slot(0.0), slot(1.0), slot(2.0)], None)
+    };
     let ss = top * 0.6;
     let sound = Rect::new(w - ss - w * 0.03, (top - ss) / 2.0, ss, ss);
     Lay {
@@ -192,50 +204,61 @@ fn lay() -> Lay {
         sw,
         top,
         buttons,
+        dim,
         pad: padr,
         sound,
     }
 }
 
-fn menu_rects() -> [Rect; 4] {
+/// Las dos tarjetas del menu: MUNDO CUANTICO y MUNDO LATERAL.
+fn menu_rects() -> [Rect; 2] {
     let (w, h) = (screen_width(), screen_height());
-    let bw = (w * 0.84).min(h * 0.52);
-    let bh = (h * 0.095).min(bw * 0.25);
+    let bw = (w * 0.9).min(h * 0.6);
+    let bh = (h * 0.25).min(bw * 0.6);
     let x = (w - bw) / 2.0;
-    let y0 = h * 0.27;
-    let st = bh * 1.36;
-    [
-        Rect::new(x, y0, bw, bh),
-        Rect::new(x, y0 + st, bw, bh),
-        Rect::new(x, y0 + st * 2.0, bw, bh),
-        Rect::new(x, y0 + st * 3.0, bw, bh),
-    ]
+    let y0 = h * 0.24;
+    [Rect::new(x, y0, bw, bh), Rect::new(x, y0 + bh + h * 0.075, bw, bh)]
 }
 
-/// Tarjetas de la lista de acertijos (2 columnas), tarjeta AL AZAR y boton VOLVER.
-fn puzzle_rects() -> (Vec<Rect>, Rect, Rect) {
+/// Niveles por pagina en el MUNDO LATERAL (4 columnas x 5 filas).
+const PAGE: usize = 20;
+
+struct LevelLay {
+    cells: Vec<Rect>,
+    prev: Rect,
+    next: Rect,
+    back: Rect,
+    rules: Rect,
+}
+
+/// Pantalla de niveles laterales: reglas arriba, rejilla de niveles, paginas y VOLVER.
+fn level_rects() -> LevelLay {
     let (w, h) = (screen_width(), screen_height());
     let area = (w * 0.92).min(h * 0.62);
     let x0 = (w - area) / 2.0;
-    let gap = area * 0.04;
-    let g = gap * 1.2;
-    let cw = (area - gap) / 2.0;
-    let y0 = h * 0.25;
-    let rows = ((PUZZLES.len() + 1) / 2) as f32;
-    // Caben las filas, la tarjeta al azar (0.85) y VOLVER (0.6) hasta el 97% de la pantalla
-    let avail = h * 0.97 - y0;
-    let ch = (cw * 0.62).min((avail - (rows + 2.0) * g) / (rows + 1.45));
-    let mut v = Vec::new();
-    for i in 0..PUZZLES.len() {
-        let col = (i % 2) as f32;
-        let row = (i / 2) as f32;
-        v.push(Rect::new(x0 + col * (cw + gap), y0 + row * (ch + g), cw, ch));
+    let rules = Rect::new(x0, h * 0.135, area, h * 0.2);
+    let gy0 = rules.y + rules.h + h * 0.035;
+    let nav_h = h * 0.065;
+    let gy1 = h * 0.975 - nav_h - h * 0.02;
+    let cols = 4.0;
+    let rows = 5.0;
+    let gap = area * 0.03;
+    let cw = (area - gap * (cols - 1.0)) / cols;
+    let ch = ((gy1 - gy0 - gap * (rows - 1.0)) / rows).min(cw * 0.9);
+    let mut cells = Vec::new();
+    for i in 0..PAGE {
+        let (c, r) = ((i % 4) as f32, (i / 4) as f32);
+        cells.push(Rect::new(x0 + c * (cw + gap), gy0 + r * (ch + gap), cw, ch));
     }
-    let ry = y0 + rows * (ch + g);
-    let rand = Rect::new(x0, ry, area, ch * 0.85);
-    let bw = area * 0.6;
-    let back = Rect::new((w - bw) / 2.0, ry + ch * 0.85 + g, bw, ch * 0.6);
-    (v, rand, back)
+    let ny = gy0 + rows * (ch + gap) + h * 0.005;
+    let nw = area * 0.2;
+    LevelLay {
+        cells,
+        prev: Rect::new(x0, ny, nw, nav_h),
+        next: Rect::new(x0 + area - nw, ny, nw, nav_h),
+        back: Rect::new(x0 + nw + gap, ny, area - 2.0 * (nw + gap), nav_h),
+        rules,
+    }
 }
 
 /// Botones de fin de partida (mas arriba, para dejar sitio al resumen lateral).
@@ -615,7 +638,15 @@ struct App {
     pad_held: Vec<(u64, usize, f32)>,
     /// Explicacion de pieza especial (0 superposicion, 1 entrelazada, 2 tunel)
     explain: Option<(u8, f32)>,
-    explained: [bool; 3],
+    explained: [bool; 4],
+    q_intro_seen: bool,
+    lat_rules_seen: bool,
+    /// Pagina de la lista de niveles laterales
+    page: usize,
+    /// Destello al saltar de dimension (1 -> 0)
+    dim_flash: f32,
+    /// Mejor nivel cuantico alcanzado en la sesion
+    q_best: u32,
     /// Tarjeta de explicacion del entrenamiento lateral al empezar
     intro: bool,
     intro_seen: [bool; 3],
@@ -678,7 +709,12 @@ impl App {
             last_result: None,
             pad_held: Vec::new(),
             explain: None,
-            explained: [false; 3],
+            explained: [false; 4],
+            q_intro_seen: false,
+            lat_rules_seen: false,
+            page: 0,
+            dim_flash: 0.0,
+            q_best: 0,
             intro: false,
             intro_seen: [false; 3],
             intro_t: 0.0,
@@ -743,7 +779,7 @@ impl App {
     /// Revisa el reto activo tras colocar una pieza.
     #[allow(clippy::too_many_arguments)]
     fn on_placed(&mut self, l: &Lay, kind: usize, rot: usize, from_hold: bool, observed: bool, tunneled: bool, slid: bool, lines: usize) {
-        if self.puzzle.is_some() || self.state != State::Playing {
+        if self.puzzle.is_some() || self.state != State::Playing || !RETOS_EN_PARTIDA {
             self.ent_flag = false;
             return;
         }
@@ -817,45 +853,45 @@ impl App {
         self.sfx.play(S::Click, 0.5);
         self.set_state(State::Playing);
         let l = lay();
-        let name = if i < PUZZLES.len() {
-            format!("ACERTIJO {}", i + 1)
-        } else {
-            format!("AL AZAR {}", i - PUZZLES.len() + 1)
-        };
-        self.popup(&l, &name, GOLD, true);
+        self.popup(&l, &format!("NIVEL LATERAL {}", i + 1), GOLD, true);
+        // La primera vez se muestran las reglas del mundo lateral
+        self.intro = !self.lat_rules_seen;
+        self.lat_rules_seen = true;
+        self.intro_t = 0.0;
+        self.page = i / PAGE;
+        FOUR_BTN.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Un acertijo del banco generado: de los que aun no resolviste, los mas faciles primero.
-    fn start_random(&mut self) {
-        let base = PUZZLES.len();
-        let end = puzzles::total();
-        if end <= base {
-            self.set_state(State::Puzzles);
-            return;
-        }
-        let cur = self.puzzle;
-        let mut pool: Vec<usize> = (base..end).filter(|&i| self.stars[i] == 0 && Some(i) != cur).collect();
-        pool.truncate(6);
-        if pool.is_empty() {
-            pool = (base..end).filter(|&i| Some(i) != cur).collect();
-        }
-        if pool.is_empty() {
-            pool.push(base);
-        }
-        let k = game::rand_int(pool.len() as i32) as usize;
-        self.start_puzzle(pool[k], false);
+    /// Primer nivel lateral sin resolver: hasta ahi estan abiertos los niveles.
+    fn lat_unlocked(&self) -> usize {
+        self.solved.iter().position(|s| !*s).unwrap_or(self.solved.len().saturating_sub(1))
     }
 
-    /// Despues de resolver: el siguiente de la lista o uno al azar.
+    /// Despues de resolver: el siguiente nivel (o la lista si era el ultimo).
     fn pz_next(&mut self, i: usize) {
-        if i < PUZZLES.len() {
-            if i + 1 < PUZZLES.len() {
-                self.start_puzzle(i + 1, false);
-            } else {
-                self.set_state(State::Puzzles);
-            }
+        if i + 1 < puzzles::total() {
+            self.start_puzzle(i + 1, false);
         } else {
-            self.start_random();
+            self.set_state(State::Puzzles);
+        }
+    }
+
+    /// Empieza una partida del MUNDO CUANTICO desde el nivel 1.
+    fn start_quantum(&mut self) {
+        self.start(Mode::Facil);
+        self.game = Game::new_quantum();
+        self.intro = !self.q_intro_seen;
+        self.q_intro_seen = true;
+        FOUR_BTN.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Salto de dimension (boton DIMENSION o tecla D).
+    fn dim_press(&mut self, l: &Lay) {
+        if !self.game.dims {
+            self.popup(l, "DIMENSIONES: se abren en el NIVEL 4", VIOLET, false);
+            self.sfx.play(S::Click, 0.3);
+        } else {
+            self.game.switch_dim();
         }
     }
 
@@ -1107,27 +1143,23 @@ impl App {
                 if self.sound_hit(pos, l) {
                     continue;
                 }
-                for (i, r) in rs.iter().enumerate() {
-                    if r.contains(pos) {
-                        if i < 3 {
-                            self.start(MODES[i]);
-                        } else {
-                            self.sfx.play(S::Click, 0.5);
-                            self.set_state(State::Puzzles);
-                        }
-                        return;
-                    }
+                if rs[0].contains(pos) {
+                    self.start_quantum();
+                    return;
+                }
+                if rs[1].contains(pos) {
+                    self.sfx.play(S::Click, 0.5);
+                    self.page = self.lat_unlocked() / PAGE;
+                    self.set_state(State::Puzzles);
+                    return;
                 }
             }
         }
-        if is_key_pressed(KeyCode::Key4) {
+        if is_key_pressed(KeyCode::Key2) {
+            self.page = self.lat_unlocked() / PAGE;
             self.set_state(State::Puzzles);
-        } else if is_key_pressed(KeyCode::Key1) {
-            self.start(Mode::Facil);
-        } else if is_key_pressed(KeyCode::Key2) || is_key_pressed(KeyCode::Enter) {
-            self.start(Mode::Normal);
-        } else if is_key_pressed(KeyCode::Key3) {
-            self.start(Mode::Experto);
+        } else if is_key_pressed(KeyCode::Key1) || is_key_pressed(KeyCode::Enter) {
+            self.start_quantum();
         }
     }
 
@@ -1211,6 +1243,11 @@ impl App {
                         self.gestures.insert(id, Gesture::new(pos, now, true));
                         continue;
                     }
+                    if l.dim.map(|r| r.contains(pos)).unwrap_or(false) {
+                        self.gestures.insert(id, Gesture::new(pos, now, true));
+                        self.dim_press(l);
+                        continue;
+                    }
                     if let Some(i) = l.buttons.iter().position(|r| r.contains(pos)) {
                         self.gestures.insert(id, Gesture::new(pos, now, true));
                         match i {
@@ -1219,10 +1256,14 @@ impl App {
                                     self.popup(l, "Ya guardaste esta pieza: suelta una primero", MAGENTA, false);
                                 }
                             }
+                            1 if self.puzzle.is_some() => {
+                                self.show_hint = true;
+                                self.sfx.play(S::Click, 0.5);
+                            }
                             1 => {
                                 if !self.game.observe() {
                                     let msg = if self.game.charges == 0 {
-                                        "Sin cargas de OBSERVAR: supera retos para ganar"
+                                        "Sin cargas de OBSERVAR: sube de nivel para ganar"
                                     } else {
                                         "OBSERVAR solo sirve con pieza DOBLE (2 copias con onda)"
                                     };
@@ -1402,6 +1443,15 @@ impl App {
             self.game.shift(dir);
             shifts -= dir;
         }
+        if self.puzzle.is_none() {
+            if is_key_pressed(KeyCode::D) || is_key_pressed(KeyCode::Tab) {
+                self.dim_press(l);
+            }
+            if is_key_pressed(KeyCode::F2) {
+                self.game.debug_level_up();
+            }
+        }
+        self.dim_flash = (self.dim_flash - dt * 2.5).max(0.0);
         let soft = is_key_down(KeyCode::Down) || pad_soft;
         // Tiempo lento dentro del reto: mas margen para pensar.
         let gdt = if !soft && self.challenge.is_some() { dt * lateral::level(self.mode).slow } else { dt };
@@ -1420,22 +1470,38 @@ impl App {
     }
 
     fn update_puzzles(&mut self, ptrs: &[Ptr], l: &Lay) {
-        let (cards, rand, back) = puzzle_rects();
+        let ll = level_rects();
+        let total = puzzles::total();
+        let pages = (total + PAGE - 1) / PAGE;
+        let open = self.lat_unlocked();
         for p in ptrs {
             if let Ptr::Down(_, pos) = *p {
                 if self.sound_hit(pos, l) {
                     continue;
                 }
-                if rand.contains(pos) {
-                    self.start_random();
+                if ll.prev.contains(pos) && self.page > 0 {
+                    self.page -= 1;
+                    self.sfx.play(S::Click, 0.5);
                     return;
                 }
-                for (i, r) in cards.iter().enumerate() {
-                    if r.contains(pos) {
-                        self.start_puzzle(i, false);
+                if ll.next.contains(pos) && self.page + 1 < pages {
+                    self.page += 1;
+                    self.sfx.play(S::Click, 0.5);
+                    return;
+                }
+                for (k, r) in ll.cells.iter().enumerate() {
+                    let i = self.page * PAGE + k;
+                    if i < total && r.contains(pos) {
+                        // Los niveles se abren en orden: hasta el primero sin resolver
+                        if i <= open {
+                            self.start_puzzle(i, false);
+                        } else {
+                            self.sfx.play(S::Click, 0.25);
+                        }
                         return;
                     }
                 }
+                let back = ll.back;
                 if back.contains(pos) {
                     self.sfx.play(S::Click, 0.5);
                     self.set_state(State::Menu);
@@ -1445,6 +1511,8 @@ impl App {
         }
         if is_key_pressed(KeyCode::Escape) {
             self.set_state(State::Menu);
+        } else if is_key_pressed(KeyCode::Enter) {
+            self.start_puzzle(open, false);
         }
     }
 
@@ -1565,8 +1633,7 @@ impl App {
                     return;
                 }
                 if rs[1].contains(pos) {
-                    let m = self.mode;
-                    self.start(m);
+                    self.start_quantum();
                     return;
                 }
                 if rs[2].contains(pos) {
@@ -1593,8 +1660,7 @@ impl App {
                     continue;
                 }
                 if rs[0].contains(pos) {
-                    let m = self.mode;
-                    self.start(m);
+                    self.start_quantum();
                     return;
                 }
                 if rs[1].contains(pos) {
@@ -1605,8 +1671,7 @@ impl App {
             }
         }
         if is_key_pressed(KeyCode::Enter) {
-            let m = self.mode;
-            self.start(m);
+            self.start_quantum();
         }
     }
 
@@ -1671,8 +1736,35 @@ impl App {
                 }
                 Event::Perfect => self.popup(l, "LIMPIEZA PERFECTA", GOLD, true),
                 Event::LevelUp(n) => {
-                    self.popup(l, &format!("NIVEL {}", n), GREEN, true);
+                    self.popups.clear();
+                    self.popup(l, &format!("NIVEL CUANTICO {}", n), GREEN, true);
+                    self.popup(l, game::qlevel_name(n), CYAN, true);
+                    self.q_best = self.q_best.max(n);
                     self.sfx.play(S::Level, 0.5);
+                    for k in 0..20 {
+                        let p = vec2(l.bx + s * (k % 10) as f32 + s * 0.5, l.by + s * 2.0);
+                        self.burst(p, if k % 2 == 0 { CYAN } else { VIOLET }, 4, s * 7.0, s * 0.18);
+                    }
+                }
+                Event::DimOpen => {
+                    // Primera vez: el juego se detiene y explica las dimensiones
+                    if !self.explained[3] {
+                        self.explained[3] = true;
+                        self.explain = Some((3, 0.0));
+                        self.block_input = true;
+                    }
+                    self.dim_flash = 1.0;
+                    self.sfx.play(S::LatIn, 0.6);
+                }
+                Event::DimSwitch => {
+                    self.dim_flash = 1.0;
+                    self.sway_t = 0.0;
+                    self.sfx.play(S::Tunnel, 0.45);
+                }
+                Event::DimBlocked => {
+                    self.popup(l, "BLOQUEADO: la pieza no cabe en la otra dimension", MAGENTA, false);
+                    self.shake = self.shake.max(s * 0.15);
+                    self.sfx.play(S::Click, 0.4);
                 }
                 Event::Combo(c) => self.popup(l, &format!("COMBO x{}", c), CYAN, false),
                 Event::Clear { rows, cells, n, points } => {
@@ -1845,18 +1937,16 @@ impl App {
         draw_sound_icon(l.sound, self.sfx.on);
     }
 
+    /// Menu: dos mundos puros, cada uno con su tarjeta ilustrada.
     fn draw_menu(&self) {
         let (w, h) = (screen_width(), screen_height());
+        let t = self.time;
         let ms = w * 0.05;
         for mp in self.menu_pieces.iter() {
             let col = pieces::color(mp.kind);
             let bx = mp.x * w;
             let by = mp.y * h;
-            let a = if mp.sup {
-                0.12 + 0.1 * (self.time * 8.0 + mp.x * 10.0).sin()
-            } else {
-                0.18
-            };
+            let a = if mp.sup { 0.10 + 0.08 * (t * 8.0 + mp.x * 10.0).sin() } else { 0.14 };
             for &(cx, cy) in pieces::cells(mp.kind, mp.rot).iter() {
                 draw_block(bx + cx as f32 * ms, by + cy as f32 * ms, ms, col, a);
                 if mp.sup {
@@ -1866,79 +1956,114 @@ impl App {
         }
         // Titulo en bloques: cada letra del color de una pieza
         let title = "CUANTRIS";
-        let tc = (w * 0.88 / volumen::block_text_width(title, 1.0)).min(h * 0.017).max(2.0);
+        let tc = (w * 0.88 / volumen::block_text_width(title, 1.0)).min(h * 0.016).max(2.0);
         let tx0 = w / 2.0 - volumen::block_text_width(title, tc) / 2.0;
-        let ty = h * 0.065;
+        let ty = h * 0.055;
         for (i, ch) in title.chars().enumerate() {
-            let wob = (self.time * 2.0 + i as f32 * 0.6).sin() * tc * 0.5;
+            let wob = (t * 2.0 + i as f32 * 0.6).sin() * tc * 0.5;
             let lx = tx0 + i as f32 * 6.0 * tc + 2.5 * tc;
             volumen::block_text_c(&ch.to_string(), lx, ty + wob, tc, pieces::color(i % 7));
         }
         let by = ty + tc * 8.6;
-        let ss = fit_size("BLOQUES CUANTICOS", tc * 2.6, w * 0.8);
-        text_c("BLOQUES CUANTICOS", w / 2.0, by + ss * 0.7, ss, alpha(GOLD, 0.95));
-        wavy_line(
-            vec2(w * 0.15, by + ss * 1.4),
-            vec2(w * 0.85, by + ss * 1.4),
-            tc * 0.8,
-            self.time,
-            2.0,
-            alpha(CYAN, 0.6),
-        );
+        let ss = fit_size("ELIGE TU MUNDO", tc * 2.4, w * 0.8);
+        text_c("ELIGE TU MUNDO", w / 2.0, by + ss * 0.7, ss, alpha(WHITE, 0.85));
+        wavy_line(vec2(w * 0.15, by + ss * 1.35), vec2(w * 0.85, by + ss * 1.35), tc * 0.8, t, 2.0, alpha(CYAN, 0.6));
 
         let rs = menu_rects();
-        let info = [
-            ("FACIL", "Retos laterales CON pista", GREEN),
-            ("NORMAL", "Retos laterales, pista a mitad", CYAN),
-            ("EXPERTO", "Retos laterales SIN pista + ruido", MAGENTA),
-            ("ACERTIJOS", "Pensamiento lateral puro - 8 retos", GOLD),
+        let open = self.lat_unlocked();
+        let n_ok = self.solved.iter().filter(|s| **s).count();
+        let n_st: u32 = self.stars.iter().map(|s| *s as u32).sum();
+        let q_line = if self.q_best > 0 {
+            format!("Tu mejor nivel: {}", self.q_best)
+        } else {
+            "5 niveles cuanticos".to_string()
+        };
+        let l_line = format!("Nivel {} de {}", open + 1, puzzles::total());
+        let l_line2 = format!("{} resueltos, {} estrellas", n_ok, n_st);
+        // (nombre, dos lineas de descripcion, dos lineas de progreso, color)
+        let cards = [
+            ("CUANTICO", ["Las piezas caen y la", "realidad se desdobla"], [q_line.as_str(), "Dimensiones en el 4"], CYAN),
+            ("LATERAL", ["Sin reloj. Lo obvio", "no basta: piensa de lado"], [l_line.as_str(), l_line2.as_str()], GOLD),
         ];
         for (i, r) in rs.iter().enumerate() {
-            let (name, desc, c) = info[i];
-            let pulse = ((self.time * 2.0 + i as f32).sin() * 0.5 + 0.5) * 0.5;
-            button(*r, "", c, true, pulse * 0.4);
-            // Cubo decorativo a cada lado del nombre
-            let bs = r.h * 0.36;
-            draw_block(r.x + r.h * 0.16, r.y + r.h * 0.3, bs, c, 1.0);
-            draw_block(r.x + r.w - r.h * 0.16 - bs, r.y + r.h * 0.3, bs, c, 1.0);
-            let tw = r.w - r.h * 1.1;
-            let s1 = fit_size(name, r.h * 0.46, tw);
-            let ny = r.y + r.h * 0.47;
-            text_c(name, r.x + r.w / 2.0 + 2.0, ny + 2.0, s1, Color::new(0.0, 0.0, 0.0, 0.8));
-            text_c(name, r.x + r.w / 2.0, ny, s1, WHITE);
-            let s2 = fit_size(desc, r.h * 0.24, tw);
-            let dy = r.y + r.h * 0.78;
-            text_c(desc, r.x + r.w / 2.0 + 1.0, dy + 1.0, s2, Color::new(0.0, 0.0, 0.0, 0.8));
-            text_c(desc, r.x + r.w / 2.0, dy, s2, alpha(WHITE, 0.92));
+            let (name, desc, line, c) = cards[i];
+            let pulse = ((t * 2.0 + i as f32 * 1.7).sin() * 0.5 + 0.5) * 0.25;
+            button(*r, "", c, true, pulse);
+            // Ilustracion a la izquierda dentro de una vitrina
+            let iw = r.h * 0.62;
+            let ir = Rect::new(r.x + r.h * 0.13, r.y + (r.h - iw) / 2.0, iw, iw);
+            panel(ir, c);
+            let u = iw / 6.5;
+            if i == 0 {
+                // Dos dimensiones superpuestas + pieza en superposicion
+                for k in 0..2 {
+                    let off = if k == 0 { -u * 0.9 } else { u * 0.9 };
+                    let a = 0.55 + 0.3 * (t * 6.0 + k as f32 * PI).sin();
+                    for &(cx, cy) in pieces::cells(2, 0).iter() {
+                        draw_block(ir.x + iw / 2.0 - u * 1.5 + off + cx as f32 * u, ir.y + u * 0.9 + cy as f32 * u, u, pieces::color(2), a);
+                    }
+                }
+                for x in 0..5 {
+                    let px = ir.x + u * 0.75 + x as f32 * u;
+                    let py = ir.y + iw - u * 1.9;
+                    if x == 2 {
+                        let m = u * 0.14;
+                        draw_rectangle_lines(px + m, py + m, u - 2.0 * m, u - 2.0 * m, 2.0, alpha(MAGENTA, 0.6 + 0.4 * (t * 3.0).sin().abs()));
+                        draw_line(px + m, py + u - m, px + u - m, py + m, 1.0, alpha(MAGENTA, 0.7));
+                    } else {
+                        draw_block(px, py, u, pieces::color(0), 1.0);
+                    }
+                }
+            } else {
+                // Pieza que entra de lado bajo un saliente + estrellas
+                let gx = ir.x + u * 0.75;
+                let gy = ir.y + u * 1.0;
+                let grey = pieces::color(7);
+                for x in 0..5 {
+                    draw_block(gx + x as f32 * u, gy + u * 2.4, u, grey, 1.0);
+                }
+                draw_block(gx + u * 3.0, gy + u * 0.4, u, grey, 1.0);
+                draw_block(gx + u * 4.0, gy + u * 0.4, u, grey, 1.0);
+                let sl = ((t * 0.8).fract() * 1.4).min(1.0);
+                let sx = gx + u * (0.0 + 2.0 * sl);
+                draw_block(sx, gy + u * 1.4, u, pieces::color(3), 1.0);
+                draw_block(sx + u, gy + u * 1.4, u, pieces::color(3), 1.0);
+                modo_lateral::chevrones(gx + u * 1.0, gy + u * 0.6, u * 0.32, 1.0, 3, t, alpha(GOLD, 0.95));
+                for k in 0..3 {
+                    draw_star(ir.x + iw / 2.0 + (k as f32 - 1.0) * u * 1.5, ir.y + iw - u * 0.95, u * 0.55, true);
+                }
+            }
+            // Textos a la derecha
+            let tx = ir.x + iw + r.h * 0.1;
+            let tw = r.x + r.w - tx - r.h * 0.1;
+            let dark = Color::new(0.0, 0.0, 0.0, 0.8);
+            let s0 = fit_size("MUNDO", r.h * 0.1, tw);
+            draw_text("MUNDO", tx, r.y + r.h * 0.15, s0, alpha(WHITE, 0.85));
+            let s1 = fit_size(name, r.h * 0.22, tw);
+            draw_text(name, tx + 2.0, r.y + r.h * 0.33 + 2.0, s1, dark);
+            draw_text(name, tx, r.y + r.h * 0.33, s1, WHITE);
+            let s2 = desc.iter().map(|d| fit_size(d, r.h * 0.1, tw)).fold(f32::MAX, f32::min);
+            for (k, d) in desc.iter().enumerate() {
+                let yy = r.y + r.h * (0.47 + 0.1 * k as f32);
+                draw_text(d, tx + 1.0, yy + 1.0, s2, dark);
+                draw_text(d, tx, yy, s2, alpha(WHITE, 0.97));
+            }
+            let s3 = line.iter().map(|d| fit_size(d, r.h * 0.09, tw)).fold(f32::MAX, f32::min);
+            for (k, d) in line.iter().enumerate() {
+                let yy = r.y + r.h * (0.69 + 0.09 * k as f32);
+                draw_text(d, tx + 1.0, yy + 1.0, s3, dark);
+                draw_text(d, tx, yy, s3, Color::new(1.0, 0.97, 0.75, 1.0));
+            }
+            let go = "JUGAR >";
+            let s4 = fit_size(go, r.h * 0.12, tw);
+            let p = (t * 3.0 + i as f32).sin() * 0.5 + 0.5;
+            draw_text(go, tx + 1.5, r.y + r.h * 0.94 + 1.5, s4, dark);
+            draw_text(go, tx, r.y + r.h * 0.94, s4, alpha(WHITE, 0.7 + 0.3 * p));
         }
-
-        let help = [
-            "Piezas cuanticas: doble, enlace y tunel",
-            "Cada nivel entrena pensamiento lateral",
-        ];
-        let last = rs[3];
-        let mut y = last.y + last.h + h * 0.06;
-        let hs = help
-            .iter()
-            .map(|t| fit_size(t, (w * 0.045).min(h * 0.026), w * 0.92))
-            .fold(f32::MAX, f32::min);
-        for (i, t) in help.iter().enumerate() {
-            let c = if i == 1 { alpha(GOLD, 0.95) } else { alpha(WHITE, 0.8) };
-            text_c(t, w / 2.0, y, hs, c);
-            y += hs * 1.45;
-        }
-        let (ok, tried) = self.session_stats.total();
-        if self.best > 0 || tried > 0 {
-            let t = format!(
-                "RECORD: {}    INDICE LATERAL: {}  ({}/{} retos)",
-                self.best,
-                self.session_stats.index(),
-                ok,
-                tried
-            );
-            let ts2 = fit_size(&t, hs * 1.05, w * 0.94);
-            text_c(&t, w / 2.0, (y + hs).min(h * 0.98), ts2, GOLD);
-        }
+        let last = rs[1];
+        let foot = "Cada mundo es puro: en uno piensas en cuantico, en el otro de lado";
+        let fs = fit_size(foot, (w * 0.04).min(h * 0.022), w * 0.94);
+        text_c(foot, w / 2.0, (last.y + last.h + h * 0.07).min(h * 0.97), fs, alpha(WHITE, 0.7));
     }
 
     fn draw_game(&self, l: &Lay) {
@@ -1953,17 +2078,14 @@ impl App {
         if let Some(i) = self.puzzle {
             self.header_tint(l);
             let p = puzzles::get(i);
-            let ts = fit_size(p.name, l.top * 0.5, w * 0.62);
-            text_3d_c(p.name, w / 2.0, l.top * 0.7, ts, GOLD);
-            let tag = if i < PUZZLES.len() {
-                format!("RETO {}/{}", i + 1, PUZZLES.len())
-            } else {
-                "AL AZAR".to_string()
-            };
-            let ms = fit_size(&tag, l.top * 0.26, w * 0.17);
-            draw_text(&tag, w * 0.03, l.top * 0.5, ms, alpha(TUNNEL_C, 0.85));
-            let mo = fit_size("LATERAL", l.top * 0.22, w * 0.17);
-            draw_text("LATERAL", w * 0.03, l.top * 0.82, mo, GOLD);
+            let name = format!("NIVEL {}", i + 1);
+            let ts = fit_size(&name, l.top * 0.5, w * 0.5);
+            text_3d_c(&name, w / 2.0, l.top * 0.7, ts, GOLD);
+            let tag = format!("DE {}", puzzles::total());
+            let ms = fit_size(&tag, l.top * 0.22, w * 0.17);
+            draw_text(&tag, w * 0.03, l.top * 0.82, ms, alpha(WHITE, 0.6));
+            let mo = fit_size("LATERAL", l.top * 0.26, w * 0.19);
+            draw_text("LATERAL", w * 0.03, l.top * 0.5, mo, GOLD);
             // Meta y pista entre el titulo y el tablero
             let fr = (l.cell * 0.3).max(4.0);
             let space = (l.by - fr - l.top).max(l.cell * 1.2);
@@ -1984,8 +2106,10 @@ impl App {
                 let hsz = fit_size(&hint, gs * 0.85, w * 0.94);
                 text_c(&hint, w / 2.0, y, hsz, GOLD);
             }
-        } else {
+        } else if RETOS_EN_PARTIDA {
             self.draw_mode_header(l);
+        } else {
+            self.draw_quantum_header(l);
         }
         let off = vec2(
             (self.time * 91.0).sin() * self.shake + modo_lateral::balanceo(self.sway_t, l.cell),
@@ -1994,7 +2118,28 @@ impl App {
         self.draw_board(l, off);
         self.draw_side(l);
         if self.puzzle.is_none() {
-            self.draw_lateral_banner(l);
+            if RETOS_EN_PARTIDA {
+                self.draw_lateral_banner(l);
+            } else {
+                self.draw_quantum_banner(l);
+            }
+        }
+        // Boton DIMENSION: salta entre los dos pozos (se abre en el nivel 4)
+        if let Some(r) = l.dim {
+            let gq = &self.game;
+            let (label, c) = if !gq.dims {
+                ("DIMENSION", VIOLET)
+            } else if gq.dim == 0 {
+                ("DIMENSION A", CYAN)
+            } else {
+                ("DIMENSION B", MAGENTA)
+            };
+            button(r, label, c, gq.dims, self.dim_flash);
+            if !gq.dims {
+                let cap = "se abre en nivel 4";
+                let cs = fit_size(cap, r.h * 0.2, r.w * 0.9);
+                text_c(cap, r.x + r.w / 2.0, r.y + r.h - cs * 0.35, cs, alpha(VIOLET, 0.9));
+            }
         }
         let g = &self.game;
         let can_hold = !g.hold_used && g.active.is_some();
@@ -2002,9 +2147,14 @@ impl App {
         button(l.buttons[0], "GUARDAR", MAGENTA, can_hold, 0.0);
         // En acertijo el boton no parpadea: descubrir que hay que observar es parte del reto.
         let pulse = if can_obs && !g.puzzle { (self.time * 7.0).sin() * 0.5 + 0.5 } else { 0.0 };
-        button(l.buttons[1], &format!("OBSERVAR {}", g.charges), GOLD, can_obs, pulse);
+        if g.puzzle {
+            // Mundo lateral: no hay piezas cuanticas; el boton central da la pista
+            button(l.buttons[1], "PISTA", GOLD, !self.show_hint, 0.0);
+        } else {
+            button(l.buttons[1], &format!("OBSERVAR {}", g.charges), GOLD, can_obs, pulse);
+        }
         // Explicar por que esta apagado
-        if !can_obs {
+        if !can_obs && !g.puzzle {
             let r = l.buttons[1];
             let cap = if g.charges == 0 { "sin cargas" } else { "solo con pieza doble" };
             let cs = fit_size(cap, r.h * 0.2, r.w * 0.9);
@@ -2098,6 +2248,34 @@ impl App {
             draw_rectangle(bx - fr, by, fr, bh, alpha(GOLD, 0.42 * self.lat_k));
             draw_rectangle(bx + bw, by, fr, bh, alpha(GOLD, 0.42 * self.lat_k));
             self.draw_echoes(bx, by, s);
+        }
+
+        // Dimensiones cuanticas: tinte del pozo y bloques "fantasma" de la otra dimension.
+        // No chocan con la pieza, pero cuentan para completar filas.
+        if g.dims {
+            let (dc, oc) = if g.dim == 0 { (CYAN, MAGENTA) } else { (MAGENTA, CYAN) };
+            draw_rectangle(bx, by, bw, bh, alpha(dc, 0.05 + 0.12 * self.dim_flash));
+            draw_rectangle_lines(bx - 1.0, by - 1.0, bw + 2.0, bh + 2.0, 2.0, alpha(dc, 0.55 + 0.3 * pulse));
+            let sh = (t * 3.0).sin() * 0.5 + 0.5;
+            for y in HIDDEN..H {
+                // Fila que ya se completa sumando las dos dimensiones menos N huecos
+                for x in 0..W {
+                    let o = g.other[y as usize][x as usize];
+                    if o.kind == 0 {
+                        continue;
+                    }
+                    let px = bx + x as f32 * s;
+                    let py = by + (y - HIDDEN) as f32 * s;
+                    let m = s * 0.14;
+                    draw_rectangle(px + m, py + m, s - 2.0 * m, s - 2.0 * m, alpha(oc, 0.13 + 0.05 * sh));
+                    draw_rectangle_lines(px + m, py + m, s - 2.0 * m, s - 2.0 * m, (s * 0.07).max(1.5), alpha(oc, 0.5 + 0.2 * sh));
+                    // Trama diagonal: se lee como holograma, no como bloque solido
+                    draw_line(px + m, py + s - m, px + s - m, py + m, 1.0, alpha(oc, 0.35));
+                    if o.ent != 0 {
+                        draw_circle(px + s / 2.0, py + s / 2.0, s * 0.1, alpha(WHITE, 0.6));
+                    }
+                }
+            }
         }
 
         // Bloques fijos + enlaces de entrelazamiento
@@ -2328,7 +2506,7 @@ impl App {
             [
                 ("PIEZAS", left.to_string()),
                 (gl, goal),
-                ("OBSERVAR", g.charges.to_string()),
+                ("USADAS", g.pieces_used().to_string()),
             ]
         } else {
             [
@@ -2357,69 +2535,69 @@ impl App {
         draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.05, 0.7));
     }
 
-    /// Tarjeta inicial: explica cuando y como aparece el pensamiento lateral.
+    /// Tarjeta de reglas al entrar a un mundo: deja claro como se juega en el.
     fn draw_intro(&self) {
         let (w, h) = (screen_width(), screen_height());
         self.draw_overlay_bg();
+        let lateral = self.puzzle.is_some();
+        let col = if lateral { GOLD } else { CYAN };
         let pw = (w * 0.94).min(h * 0.6);
         let px = (w - pw) / 2.0;
-        let ph = h * 0.86;
-        let py = h * 0.07;
-        panel(Rect::new(px, py, pw, ph), GOLD);
-        let ls = (ph / 30.0).min(w * 0.042);
+        // La tarjeta mide lo que ocupan sus 9 lineas, centrada en la pantalla
+        let ls = (h * 0.84 / 27.0).min(w * 0.046);
+        let ph = ls * 26.2;
+        let py = (h - ph) / 2.0;
+        panel(Rect::new(px, py, pw, ph), col);
         let cx = w / 2.0;
-        let mut y = py + ls * 2.4;
-        let t = "ENTRENA TU";
-        text_3d_c(t, cx, y, fit_size(t, ls * 2.0, pw * 0.9), GOLD);
+        let mut y = py + ls * 4.2;
+        block_title(if lateral { "LATERAL" } else { "CUANTICO" }, cx, y, ls * 2.6, pw * 0.86, col);
+        y += ls * 1.7;
+        let t = "COMO SE JUEGA EN ESTE MUNDO";
+        text_c(t, cx, y, fit_size(t, ls * 1.0, pw * 0.9), alpha(WHITE, 0.75));
         y += ls * 2.0;
-        let t = "PENSAMIENTO LATERAL";
-        text_3d_c(t, cx, y, fit_size(t, ls * 2.0, pw * 0.9), GOLD);
-        y += ls * 2.0;
-        let lines = [
-            ("MODO VERTICAL: juegas directo, todo cae.", CYAN),
-            ("Cada pocas piezas saltas al MODO LATERAL:", GOLD),
-            ("el mundo gira de lado y el tiempo va lento.", alpha(WHITE, 0.85)),
-            ("Te hace una pregunta \"Y si...?\" y te da", WHITE),
-            ("pocas piezas para lograr algo poco obvio.", WHITE),
-        ];
-        for (s, c) in lines.iter() {
-            text_c(s, cx, y, fit_size(s, ls, pw * 0.92), *c);
-            y += ls * 1.45;
+        // (numero de regla o 0 para sub-linea, texto, color)
+        let rules: Vec<(u32, &str, Color)> = if lateral {
+            vec![
+                (1, "SIN RELOJ: nada cae solo. Piensa con calma.", WHITE),
+                (2, "PIEZAS CONTADAS: solo las del panel PIEZAS.", WHITE),
+                (3, "META: esta escrita arriba del tablero.", WHITE),
+                (4, "LO OBVIO NO BASTA. Tus herramientas:", GOLD),
+                (0, "GUARDAR: cambia el orden de las piezas", MAGENTA),
+                (0, "GIRAR: la forma rara a veces encaja", VIOLET),
+                (0, "DESLIZAR: entra de lado bajo un saliente", GREEN),
+                (5, "MENOS PIEZAS = 3 ESTRELLAS.", WHITE),
+                (6, "Cada nivel resuelto abre el siguiente.", WHITE),
+            ]
+        } else {
+            vec![
+                (1, "Las piezas caen. Llena filas para borrarlas.", WHITE),
+                (2, "Cada nivel abre un concepto cuantico:", CYAN),
+                (0, "N1 SUPERPOSICION: pieza en 2 lugares", CYAN),
+                (0, "N2 EFECTO TUNEL: atraviesa bloques", TUNNEL_C),
+                (0, "N3 ENTRELAZAMIENTO: gemelas a distancia", VIOLET),
+                (0, "N4 DIMENSIONES: dos pozos a la vez", MAGENTA),
+                (0, "N5 SUPERCUANTICO: todo junto y veloz", GOLD),
+                (3, "Subes de nivel borrando lineas (barra de arriba).", WHITE),
+                (4, "Cada concepto se explica al aparecer.", WHITE),
+            ]
+        };
+        for (n, s, c) in rules.iter() {
+            if *n > 0 {
+                let r = ls * 0.62;
+                let bx = px + pw * 0.075;
+                draw_circle(bx, y - ls * 0.3, r, alpha(col, 0.95));
+                draw_circle(bx, y - ls * 0.3, r * 0.78, Color::new(0.03, 0.04, 0.1, 1.0));
+                text_c(&n.to_string(), bx, y, ls * 0.95, col);
+                draw_text(s, px + pw * 0.14, y, fit_size(s, ls * 0.95, pw * 0.83), *c);
+            } else {
+                draw_rectangle(px + pw * 0.15, y - ls * 0.55, ls * 0.35, ls * 0.35, *c);
+                draw_text(s, px + pw * 0.2, y, fit_size(s, ls * 0.88, pw * 0.76), *c);
+            }
+            y += ls * 1.62;
         }
-        y += ls * 0.5;
-        let t = "LAS 6 TECNICAS Y SU HERRAMIENTA";
-        text_c(t, cx, y, fit_size(t, ls * 1.05, pw * 0.92), TUNNEL_C);
-        y += ls * 1.6;
-        let rows = [
-            ("CAMBIA EL ORDEN", "boton GUARDAR", MAGENTA),
-            ("CUESTIONA EL SUPUESTO", "pieza TUNEL (flecha)", TUNNEL_C),
-            ("INVIERTE EL PROBLEMA", "piezas con punto (enlace)", VIOLET),
-            ("MIRA DISTINTO", "boton OBSERVAR", GOLD),
-            ("USA LO INESPERADO", "girar: pieza boca abajo", CYAN),
-            ("ENTRA DE LADO", "deslizar bajo un saliente", GREEN),
-        ];
-        for (name, tool, c) in rows.iter() {
-            let s1 = fit_size(name, ls * 0.95, pw * 0.5);
-            draw_text(name, px + pw * 0.05, y, s1, *c);
-            let s2 = fit_size(tool, ls * 0.9, pw * 0.42);
-            draw_text(tool, px + pw * 0.56, y, s2, alpha(WHITE, 0.85));
-            y += ls * 1.5;
-        }
-        y += ls * 0.6;
-        let lv = lateral::level(self.mode);
-        let t = format!("NIVEL {}:", self.mode.name());
-        text_c(&t, cx, y, fit_size(&t, ls * 1.1, pw * 0.9), GREEN);
-        y += ls * 1.4;
-        text_c(lv.label, cx, y, fit_size(lv.label, ls, pw * 0.92), WHITE);
-        y += ls * 1.8;
-        let t = "Superar un reto: puntos extra + 1 OBSERVAR";
-        text_c(t, cx, y, fit_size(t, ls * 0.9, pw * 0.92), alpha(GOLD, 0.9));
-        y += ls * 1.3;
-        let t = "Al final veras tu perfil por tecnica";
-        text_c(t, cx, y, fit_size(t, ls * 0.9, pw * 0.92), alpha(GOLD, 0.9));
         let p = (self.time * 3.0).sin() * 0.5 + 0.5;
         let t = "TOCA PARA JUGAR";
-        text_c(t, cx, py + ph - ls * 1.3, fit_size(t, ls * 1.3, pw * 0.8), alpha(GREEN, 0.55 + 0.45 * p));
+        text_c(t, cx, py + ph - ls * 1.2, fit_size(t, ls * 1.3, pw * 0.8), alpha(GREEN, 0.55 + 0.45 * p));
     }
 
     /// "Que es esto?": explica una pieza especial con un dibujo (el juego espera).
@@ -2453,6 +2631,18 @@ impl App {
                     "la otra DESAPARECE tambien, este donde este.",
                     "COMO USARLA: no hay boton. Pon las gemelas",
                     "donde te convenga borrar bloques lejos.",
+                ],
+            ),
+            3 => (
+                "DIMENSIONES",
+                MAGENTA,
+                [
+                    "El pozo existe en DOS dimensiones: A y B.",
+                    "Juegas en una. La otra se ve como HOLOGRAMA.",
+                    "Los hologramas NO chocan con tu pieza, pero",
+                    "una fila se borra si entre las DOS la llenan.",
+                    "COMO USARLO: pulsa DIMENSION para saltar.",
+                    "Un hueco tapado aqui, esta abierto alla.",
                 ],
             ),
             _ => (
@@ -2507,6 +2697,26 @@ impl App {
                     ent_mark(p.x, p.y, s, t0);
                 }
                 wavy_line(a, b, s * 0.35, t0, 2.5, Color::new(0.85, 0.6, 1.0, 0.8));
+            }
+            3 => {
+                // Una fila con hueco en A; el holograma de B la completa
+                let x0 = cx - s * 3.0;
+                let ry = ty + s * 0.9;
+                for x in 0..6 {
+                    let px = x0 + x as f32 * s;
+                    if x == 2 || x == 3 {
+                        let m = s * 0.14;
+                        let k = (t0 * 3.0).sin() * 0.5 + 0.5;
+                        draw_rectangle(px + m, ry + m, s - 2.0 * m, s - 2.0 * m, alpha(MAGENTA, 0.15 + 0.1 * k));
+                        draw_rectangle_lines(px + m, ry + m, s - 2.0 * m, s - 2.0 * m, 2.0, alpha(MAGENTA, 0.6 + 0.3 * k));
+                        draw_line(px + m, ry + s - m, px + s - m, ry + m, 1.0, alpha(MAGENTA, 0.5));
+                    } else {
+                        draw_block(px, ry, s * 0.96, pieces::color(0), 1.0);
+                    }
+                }
+                text_c("A", x0 - s * 0.6, ry + s * 0.75, s * 0.8, CYAN);
+                text_c("B", x0 + s * 6.6, ry + s * 0.75, s * 0.8, MAGENTA);
+                text_c("A + B = FILA COMPLETA", cx, ry - s * 0.35, s * 0.6, WHITE);
             }
             _ => {
                 let bx = cx - s * 1.5;
@@ -2903,62 +3113,197 @@ impl App {
         }
     }
 
-    fn draw_puzzles(&self) {
-        let (w, h) = (screen_width(), screen_height());
-        let ts = fit_size("ACERTIJOS", w * 0.15, w * 0.86);
-        block_title("ACERTIJOS", w / 2.0, h * 0.11, h * 0.08, w * 0.88, GOLD);
-        let sub = "Pensamiento lateral: cada reto tiene un truco";
-        let ss = fit_size(sub, ts * 0.3, w * 0.9);
-        text_c(sub, w / 2.0, h * 0.11 + ts * 0.55, ss, alpha(TUNNEL_C, 0.9));
-        let sub2 = "Sin gravedad: piensa con calma";
-        let ss2 = fit_size(sub2, ss, w * 0.9);
-        text_c(sub2, w / 2.0, h * 0.11 + ts * 0.55 + ss * 1.5, ss2, alpha(WHITE, 0.6));
-        let (cards, rand, back) = puzzle_rects();
-        let n_ok = self.solved.iter().take(PUZZLES.len()).filter(|s| **s).count();
-        let prog = format!("Resueltos: {} / {}", n_ok, PUZZLES.len());
-        let ps = fit_size(&prog, ss, w * 0.6);
-        text_c(&prog, w / 2.0, cards[0].y - ps * 0.7, ps, alpha(GOLD, 0.9));
-        for (i, r) in cards.iter().enumerate() {
-            let p = puzzles::get(i);
-            let ok = self.solved[i];
-            let c = if ok { GREEN } else { [CYAN, VIOLET, MAGENTA, GOLD][i % 4] };
-            button(*r, "", c, true, 0.0);
-            let num = format!("{}", i + 1);
-            let ns = r.h * 0.5;
-            text_c(&num, r.x + r.h * 0.32 + 2.0, r.y + r.h * 0.55 + 2.0, ns, Color::new(0.0, 0.0, 0.0, 0.6));
-            text_c(&num, r.x + r.h * 0.32, r.y + r.h * 0.55, ns, WHITE);
-            let tx = r.x + r.h * 0.62;
-            let tw = r.w - r.h * 0.7;
-            let s1 = fit_size(p.name, r.h * 0.26, tw);
-            draw_text(p.name, tx + 1.0, r.y + r.h * 0.42 + 1.0, s1, Color::new(0.0, 0.0, 0.0, 0.8));
-            draw_text(p.name, tx, r.y + r.h * 0.42, s1, WHITE);
-            let info = if ok { format!("OK - {}", p.trick) } else { p.goal.text().replace("Meta: ", "") };
-            let s2 = fit_size(&info, r.h * 0.17, tw);
-            draw_text(&info, tx + 1.0, r.y + r.h * 0.72 + 1.0, s2, Color::new(0.0, 0.0, 0.0, 0.8));
-            draw_text(&info, tx, r.y + r.h * 0.72, s2, WHITE);
-            if ok {
-                let sr = r.h * 0.09;
-                for k in 0..3 {
-                    draw_star(r.x + r.w - sr * 1.6 - (2 - k) as f32 * sr * 2.4, r.y + r.h * 0.2, sr, (k as u8) < self.stars[i]);
-                }
+    /// Cabecera del MUNDO CUANTICO: nivel, concepto, barra hacia el siguiente y dimension.
+    fn draw_quantum_header(&self, l: &Lay) {
+        let w = screen_width();
+        let g = &self.game;
+        let t = self.time;
+        let cx = w / 2.0;
+        let dc = if g.dims && g.dim == 1 { MAGENTA } else { CYAN };
+        if g.dims {
+            draw_rectangle(0.0, 0.0, w, l.top, alpha(dc, 0.10 + 0.25 * self.dim_flash));
+            draw_line(0.0, l.top, w, l.top, 2.0, alpha(dc, 0.9));
+        }
+        // Izquierda: numero de nivel en una placa
+        let ps = l.top * 0.74;
+        let pr = Rect::new(w * 0.025, (l.top - ps) / 2.0, ps * 1.25, ps);
+        panel(pr, dc);
+        let lab = fit_size("NIVEL", ps * 0.26, pr.w * 0.86);
+        text_c("NIVEL", pr.x + pr.w / 2.0, pr.y + ps * 0.3, lab, alpha(WHITE, 0.75));
+        let num = g.level.to_string();
+        let ns = fit_size(&num, ps * 0.62, pr.w * 0.8);
+        text_c(&num, pr.x + pr.w / 2.0, pr.y + ps * 0.88, ns, dc);
+        // Centro: concepto del nivel y barra de progreso
+        let name = game::qlevel_name(g.level);
+        let ts = fit_size(name, l.top * 0.36, w * 0.5);
+        text_3d_c(name, cx, l.top * 0.4, ts, dc);
+        let gw = w * 0.5;
+        let gx = cx - gw / 2.0;
+        let gy = l.top * 0.52;
+        let gh = (l.top * 0.12).max(3.0);
+        let (have, need) = g.q_progress();
+        draw_rectangle(gx, gy, gw, gh, Color::new(0.0, 0.0, 0.0, 0.55));
+        for i in 0..need {
+            let x0 = gx + gw * i as f32 / need as f32;
+            let sw = gw / need as f32 - 2.0;
+            if i < have {
+                let k = (t * 3.0 + i as f32 * 0.5).sin() * 0.5 + 0.5;
+                draw_rectangle(x0 + 1.0, gy + 1.0, sw, gh - 2.0, mix(dc, WHITE, 0.15 + 0.2 * k));
+            } else {
+                draw_rectangle_lines(x0 + 1.0, gy + 1.0, sw, gh - 2.0, 1.0, alpha(WHITE, 0.18));
             }
         }
-        // Tarjeta AL AZAR: retos nuevos del banco, siempre con solucion comprobada
-        let bank = puzzles::total() - PUZZLES.len();
-        let total_stars: u32 = self.stars.iter().skip(PUZZLES.len()).map(|s| *s as u32).sum();
-        let pulse = ((self.time * 2.0).sin() * 0.5 + 0.5) * 0.6;
-        button(rand, "", VIOLET, bank > 0, pulse);
-        let rs1 = fit_size("ACERTIJO AL AZAR", rand.h * 0.34, rand.w * 0.8);
-        text_c("ACERTIJO AL AZAR", rand.x + rand.w / 2.0 + 1.0, rand.y + rand.h * 0.42 + 1.0, rs1, Color::new(0.0, 0.0, 0.0, 0.8));
-        text_c("ACERTIJO AL AZAR", rand.x + rand.w / 2.0, rand.y + rand.h * 0.42, rs1, WHITE);
-        let sub = if bank > 0 {
-            format!("{} retos comprobados - 3 estrellas = solucion lateral ({})", bank, total_stars)
+        draw_rectangle_lines(gx, gy, gw, gh, 1.0, alpha(WHITE, 0.45));
+        let left = need - have;
+        let next = game::qlevel_name(g.level + 1);
+        let sub = if g.level >= 5 {
+            format!("{} LINEAS PARA EL NIVEL {}", left, g.level + 1)
+        } else if left == 1 {
+            format!("1 LINEA PARA {}", next)
         } else {
-            "Pronto habra mas retos".to_string()
+            format!("{} LINEAS PARA {}", left, next)
         };
-        let rs2 = fit_size(&sub, rand.h * 0.2, rand.w * 0.94);
-        text_c(&sub, rand.x + rand.w / 2.0, rand.y + rand.h * 0.77, rs2, alpha(WHITE, 0.9));
-        button(back, "VOLVER", MAGENTA, true, 0.0);
+        let ss = fit_size(&sub, l.top * 0.2, gw * 1.15);
+        text_c(&sub, cx, l.top * 0.9, ss, alpha(GOLD, 0.95));
+    }
+
+    /// Una linea bajo la cabecera: la regla del concepto que acabas de abrir.
+    fn draw_quantum_banner(&self, l: &Lay) {
+        let g = &self.game;
+        if g.over || self.intro {
+            return;
+        }
+        let (txt, c) = if g.dims {
+            if g.dim == 0 {
+                ("DIMENSION A - el holograma rosa es la dimension B", CYAN)
+            } else {
+                ("DIMENSION B - el holograma azul es la dimension A", MAGENTA)
+            }
+        } else {
+            match g.level {
+                0 | 1 => ("SUPERPOSICION: OBSERVAR elige la copia mas honda", CYAN),
+                2 => ("TUNEL: la pieza con flecha atraviesa bloques", TUNNEL_C),
+                _ => ("ENTRELAZADAS: borra una y desaparece su gemela", VIOLET),
+            }
+        };
+        self.draw_notice(l, &[(txt, alpha(c, 0.95))]);
+    }
+
+    /// Fin de partida cuantica: hasta donde llegaste y que venia despues.
+    fn draw_qsummary(&self, y0: f32) {
+        let (w, h) = (screen_width(), screen_height());
+        let pw = (w * 0.9).min(h * 0.55);
+        let px = (w - pw) / 2.0;
+        let ph = (h - y0 - h * 0.02).max(h * 0.2);
+        panel(Rect::new(px, y0, pw, ph), CYAN);
+        let ls = (ph / 11.0).min(w * 0.045);
+        let lv = self.game.level;
+        let mut y = y0 + ls * 1.5;
+        let t = "TU VIAJE CUANTICO";
+        text_c(t, w / 2.0, y, fit_size(t, ls * 1.1, pw * 0.9), CYAN);
+        y += ls * 0.7;
+        let rows = [
+            (1, "SUPERPOSICION", CYAN),
+            (2, "EFECTO TUNEL", TUNNEL_C),
+            (3, "ENTRELAZAMIENTO", VIOLET),
+            (4, "DIMENSIONES", MAGENTA),
+            (5, "SUPERCUANTICO", GOLD),
+        ];
+        for (n, name, c) in rows.iter() {
+            y += ls * 1.35;
+            let on = lv >= *n;
+            let bx = px + pw * 0.1;
+            draw_block(bx - ls * 0.5, y - ls * 0.85, ls, if on { *c } else { Color::new(0.2, 0.22, 0.3, 1.0) }, if on { 1.0 } else { 0.6 });
+            let s = format!("NIVEL {}  {}", n, name);
+            draw_text(&s, px + pw * 0.2, y, fit_size(&s, ls * 0.9, pw * 0.62), if on { *c } else { alpha(WHITE, 0.35) });
+            if on {
+                // Marca de logrado
+                let (mx, my) = (px + pw * 0.88, y - ls * 0.3);
+                draw_line(mx - ls * 0.3, my, mx - ls * 0.05, my + ls * 0.25, 3.0, GREEN);
+                draw_line(mx - ls * 0.05, my + ls * 0.25, mx + ls * 0.4, my - ls * 0.3, 3.0, GREEN);
+            }
+        }
+        y += ls * 1.9;
+        let tip = if lv < 5 {
+            format!("Siguiente: {}. Borra mas lineas para abrirlo.", game::qlevel_name(lv + 1))
+        } else {
+            format!("Llegaste al SUPERCUANTICO, nivel {}.", lv)
+        };
+        text_c(&tip, w / 2.0, y, fit_size(&tip, ls * 0.85, pw * 0.94), alpha(WHITE, 0.85));
+    }
+
+    /// MUNDO LATERAL: reglas siempre a la vista y niveles que se abren en orden.
+    fn draw_puzzles(&self) {
+        let (w, h) = (screen_width(), screen_height());
+        block_title("LATERAL", w / 2.0, h * 0.1, h * 0.062, w * 0.8, GOLD);
+        let ll = level_rects();
+        let r = ll.rules;
+        panel(r, GOLD);
+        let rules = [
+            ("1", "SIN RELOJ: nada cae solo, piensa con calma"),
+            ("2", "PIEZAS CONTADAS y una META sobre el tablero"),
+            ("3", "LO OBVIO NO BASTA: guarda, gira o entra de lado"),
+            ("4", "MENOS PIEZAS = 3 ESTRELLAS"),
+            ("5", "Cada nivel resuelto abre el siguiente"),
+        ];
+        let ls = (r.h / 8.2).min(w * 0.042);
+        let mut y = r.y + ls * 1.5;
+        let head = "REGLAS DEL MUNDO LATERAL";
+        text_c(head, r.x + r.w / 2.0, y, fit_size(head, ls * 1.0, r.w * 0.9), GOLD);
+        y += ls * 1.45;
+        for (n, t) in rules.iter() {
+            draw_circle(r.x + ls * 1.1, y - ls * 0.3, ls * 0.55, GOLD);
+            text_c(n, r.x + ls * 1.1, y, ls * 0.85, Color::new(0.08, 0.04, 0.0, 1.0));
+            draw_text(t, r.x + ls * 2.1, y, fit_size(t, ls * 0.88, r.w - ls * 2.6), WHITE);
+            y += ls * 1.2;
+        }
+        let total = puzzles::total();
+        let pages = (total + PAGE - 1) / PAGE;
+        let open = self.lat_unlocked();
+        let n_ok = self.solved.iter().filter(|s| **s).count();
+        let n_st: u32 = self.stars.iter().map(|s| *s as u32).sum();
+        let prog = format!("RESUELTOS {} / {}    ESTRELLAS {}    PAGINA {}/{}", n_ok, total, n_st, self.page + 1, pages);
+        let ps = fit_size(&prog, h * 0.02, w * 0.9);
+        text_c(&prog, w / 2.0, ll.cells[0].y - h * 0.011, ps, alpha(GOLD, 0.95));
+        for (k, r) in ll.cells.iter().enumerate() {
+            let i = self.page * PAGE + k;
+            if i >= total {
+                continue;
+            }
+            let done = self.solved[i];
+            let locked = i > open;
+            let c = if done {
+                GREEN
+            } else if locked {
+                Color::new(0.4, 0.42, 0.55, 1.0)
+            } else {
+                GOLD
+            };
+            let pulse = if i == open && !done { (self.time * 4.0).sin() * 0.5 + 0.5 } else { 0.0 };
+            button(*r, "", c, !locked, pulse);
+            let num = format!("{}", i + 1);
+            let ns = fit_size(&num, r.h * 0.5, r.w * 0.7);
+            let cxn = r.x + r.w / 2.0;
+            let ny = r.y + r.h * if locked { 0.44 } else if done { 0.5 } else { 0.66 };
+            let a = if locked { 0.45 } else { 1.0 };
+            text_c(&num, cxn + 1.5, ny + 1.5, ns, Color::new(0.0, 0.0, 0.0, 0.7 * a));
+            text_c(&num, cxn, ny, ns, alpha(WHITE, a));
+            if done {
+                let sr = (r.h * 0.11).min(r.w * 0.11);
+                for s in 0..3 {
+                    draw_star(cxn + (s as f32 - 1.0) * sr * 2.3, r.y + r.h * 0.76, sr, (s as u8) < self.stars[i]);
+                }
+            } else if locked {
+                // Candado
+                let u = r.h * 0.09;
+                let (lx, ly) = (cxn, r.y + r.h * 0.74);
+                draw_circle_lines(lx, ly - u * 0.9, u * 0.75, (u * 0.35).max(1.5), alpha(WHITE, 0.55));
+                draw_rectangle(lx - u * 1.1, ly - u * 0.7, u * 2.2, u * 1.7, Color::new(0.75, 0.77, 0.85, 0.75));
+            }
+        }
+        button(ll.prev, "<", CYAN, self.page > 0, 0.0);
+        button(ll.next, ">", CYAN, self.page + 1 < pages, 0.0);
+        button(ll.back, "MENU", MAGENTA, true, 0.0);
     }
 
     fn draw_pzwin(&self) {
@@ -3002,19 +3347,15 @@ impl App {
         }
         let retry = self.last_stars < 3;
         let rs = overlay_rects(if retry { 3 } else { 2 });
-        let next = if i < PUZZLES.len() {
-            if i + 1 < PUZZLES.len() { "SIGUIENTE" } else { "VER TODOS" }
-        } else {
-            "OTRO AL AZAR"
-        };
+        let next = if i + 1 < puzzles::total() { "SIGUIENTE NIVEL" } else { "VER NIVELES" };
         let pulse = (self.time * 4.0).sin() * 0.5 + 0.5;
         if retry {
             button(rs[0], "BUSCAR LA LATERAL", GOLD, true, pulse);
             button(rs[1], next, GREEN, true, 0.0);
-            button(rs[2], "ACERTIJOS", MAGENTA, true, 0.0);
+            button(rs[2], "NIVELES", MAGENTA, true, 0.0);
         } else {
             button(rs[0], next, GREEN, true, pulse);
-            button(rs[1], "ACERTIJOS", GOLD, true, 0.0);
+            button(rs[1], "NIVELES", GOLD, true, 0.0);
         }
     }
 
@@ -3035,7 +3376,7 @@ impl App {
         let rs = overlay_rects(3);
         button(rs[0], "REINTENTAR", GREEN, true, 0.0);
         button(rs[1], "PISTA", GOLD, true, 0.0);
-        button(rs[2], "ACERTIJOS", MAGENTA, true, 0.0);
+        button(rs[2], "NIVELES", MAGENTA, true, 0.0);
     }
 
     fn draw_pause(&self) {
@@ -3050,7 +3391,7 @@ impl App {
             button(rs[0], "CONTINUAR", GREEN, true, 0.0);
             button(rs[1], "PISTA", GOLD, true, 0.0);
             button(rs[2], "REINICIAR", CYAN, true, 0.0);
-            button(rs[3], "ACERTIJOS", MAGENTA, true, 0.0);
+            button(rs[3], "NIVELES", MAGENTA, true, 0.0);
             button(rs[4], pad_label, VIOLET, true, 0.0);
             return;
         }
@@ -3069,7 +3410,7 @@ impl App {
         let sc = format!("{}", self.game.score);
         let ss = fit_size(&sc, (w * 0.11).min(h * 0.06), w * 0.85);
         glow_text_c(&sc, w / 2.0, ty + ts * 0.6 + ss, ss, GOLD);
-        let mut info = format!("NIVEL {}   LINEAS {}", self.game.level, self.game.lines);
+        let mut info = format!("NIVEL CUANTICO {}   LINEAS {}", self.game.level, self.game.lines);
         if self.new_best {
             info.push_str("   NUEVO RECORD!");
         }
@@ -3079,7 +3420,11 @@ impl App {
         button(rs[0], "REINTENTAR", GREEN, true, 0.0);
         button(rs[1], "MENU", MAGENTA, true, 0.0);
         let last = rs[1];
-        self.draw_training(last.y + last.h * 1.45);
+        if RETOS_EN_PARTIDA {
+            self.draw_training(last.y + last.h * 1.45);
+        } else {
+            self.draw_qsummary(last.y + last.h * 1.45);
+        }
     }
 
     fn draw_fx(&self) {
@@ -3087,7 +3432,9 @@ impl App {
             let k = p.life / p.max;
             draw_rectangle(p.p.x - p.s / 2.0, p.p.y - p.s / 2.0, p.s, p.s, alpha(p.c, k));
         }
-        for p in self.popups.iter() {
+        // Con una tarjeta de explicacion abierta los avisos flotantes la taparian
+        let card = self.state == State::Playing && (self.intro || self.explain.is_some());
+        for p in self.popups.iter().filter(|_| !card) {
             let k = (p.life / 1.3).min(1.0);
             let a = (k * 3.0).min(1.0);
             let size = fit_size(&p.text, p.size, screen_width() * 0.9);

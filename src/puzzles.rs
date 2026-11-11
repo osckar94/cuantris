@@ -20,6 +20,7 @@ pub enum Goal {
 }
 
 pub struct Puzzle {
+    #[allow(dead_code)]
     pub name: &'static str,
     pub rows: &'static [&'static str],
     pub pieces: &'static [&'static str],
@@ -186,18 +187,18 @@ pub const PUZZLES: &[Puzzle] = &[
 // Banco de retos generados y comprobados (lo escribe herramientas/generador).
 include!("puzzles_gen.rs");
 
-/// Retos totales: los 8 hechos a mano y luego el banco generado.
+/// Niveles del MUNDO LATERAL: el banco generado (puro, sin piezas cuanticas),
+/// ordenado de facil a dificil. Los 8 de PUZZLES usan piezas cuanticas y quedan
+/// solo como referencia para el verificador.
 pub fn total() -> usize {
-    PUZZLES.len() + BANK.len()
+    BANK.len().max(1)
 }
 
 pub fn get(i: usize) -> &'static Puzzle {
-    if i < PUZZLES.len() {
-        &PUZZLES[i]
-    } else if BANK.is_empty() {
-        &PUZZLES[0]
+    if BANK.is_empty() {
+        &PUZZLES[2]
     } else {
-        &BANK[(i - PUZZLES.len()).min(BANK.len() - 1)]
+        &BANK[i.min(BANK.len() - 1)]
     }
 }
 
