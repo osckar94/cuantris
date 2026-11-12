@@ -12,7 +12,15 @@ y lo explica con un dibujo.
 4. DIMENSIONES: el pozo existe en dos dimensiones (A y B). Juegas en una y la otra se ve como holograma.
    Los hologramas no chocan con tu pieza, pero una fila se borra si entre las dos dimensiones la llenan.
    El botón DIMENSIÓN (o la tecla D) salta de una a otra: un hueco tapado aquí está abierto allá.
-5. SUPERCUÁNTICO: todo junto y cada vez más rápido.
+5. TERCERA DIMENSIÓN: tres pozos (A azul, B rosa, C dorada); los hologramas de las otras dos se suman para completar filas.
+6. SIMETRÍA: una línea central parte el pozo y tu pieza tiene un reflejo. Una fila simétrica
+   (mitad izquierda igual a la derecha) con 6 o más bloques se borra aunque no esté llena.
+7. CUARTA DIMENSIÓN: cuatro pozos (se añade la D verde).
+8. SUPERCUÁNTICO: todo junto, nivel tras nivel.
+
+**JEV (IA)** — en el menú hay dos botones JEV: uno juega el Mundo Cuántico y el otro resuelve los
+niveles del Mundo Lateral desde el 1, mientras tú miras. Jev usa las mismas reglas y botones que un
+jugador (en el lateral repite la solución que comprobó el generador). PAUSA para salir.
 
 **MUNDO LATERAL** — 100 niveles sin piezas cuánticas, comprobados por el generador. Reglas:
 sin reloj (nada cae solo), piezas contadas, una meta escrita sobre el tablero, y lo obvio no basta:
