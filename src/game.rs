@@ -145,6 +145,8 @@ pub enum Event {
     DimSwitch,
     /// La pieza no cabe en la otra dimension.
     DimBlocked,
+    /// Se borraron filas por simetria (cuantas).
+    Symmetry(usize),
     LevelUp(u32),
     Combo(i32),
     Clear {
@@ -222,7 +224,47 @@ pub struct Game {
     /// Dimension visible (0 = A, 1 = B). `grid` es siempre la visible.
     pub dim: u8,
     /// Bloques de la otra dimension (no chocan con la pieza, pero completan lineas).
-    pub other: [[Cell; W as usize]; H as usize],
+    pub others: [[[Cell; W as usize]; H as usize]; 3],
+    /// Cuantas dimensiones hay abiertas (1 al principio, hasta 4).
+    pub nd: usize,
+    /// Simetria: una fila simetrica con 6 o mas bloques tambien se borra.
+    pub sym: bool,
+}
+
+/// Un paso de la solucion de un nivel lateral: guardar la pieza, o dejarla
+/// quieta en (giro, columna, fila). Lo escribe el generador y lo repite Jev.
+#[derive(Clone, Copy, Debug)]
+pub enum Op {
+    Hold,
+    Place(usize, i32, i32),
+}
+
+/// Un movimiento de la pieza (los mismos que tiene el jugador).
+#[derive(Clone, Copy)]
+pub enum Mv {
+    Left,
+    Right,
+    Down,
+    Cw,
+    Ccw,
+}
+
+/// Lee una solucion guardada: "H;P1,4,19;P0,3,20".
+pub fn parse_sol(s: &str) -> Vec<Op> {
+    s.split(';')
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| {
+            if p == "H" {
+                return Some(Op::Hold);
+            }
+            let v: Vec<i32> = p.trim_start_matches('P').split(',').filter_map(|n| n.parse().ok()).collect();
+            if v.len() == 3 {
+                Some(Op::Place(v[0] as usize, v[1], v[2]))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Valor de un pozo para Jev: pocas alturas, pocos huecos, superficie lisa, lineas hechas.
@@ -252,8 +294,8 @@ fn bot_eval(g: &Game, lines_before: u32) -> f32 {
     -0.51 * agg + 0.76 * (g.lines - lines_before) as f32 - 0.36 * holes - 0.18 * bump
 }
 
-/// Lineas totales necesarias para llegar a cada nivel cuantico (2, 3, 4, 5).
-const Q_GOALS: [u32; 4] = [3, 7, 11, 16];
+/// Lineas totales necesarias para llegar a cada nivel cuantico (2 a 7).
+const Q_GOALS: [u32; 6] = [3, 7, 11, 16, 22, 29];
 
 /// Nivel cuantico que corresponde a un total de lineas.
 pub fn qlevel_for(lines: u32) -> u32 {
@@ -263,8 +305,8 @@ pub fn qlevel_for(lines: u32) -> u32 {
             lv += 1;
         }
     }
-    if lines >= Q_GOALS[3] {
-        lv += (lines - Q_GOALS[3]) / 6;
+    if lines >= Q_GOALS[5] {
+        lv += (lines - Q_GOALS[5]) / 7;
     }
     lv
 }
@@ -276,6 +318,9 @@ pub fn qlevel_name(lv: u32) -> &'static str {
         2 => "EFECTO TUNEL",
         3 => "ENTRELAZAMIENTO",
         4 => "DIMENSIONES",
+        5 => "TERCERA DIMENSION",
+        6 => "SIMETRIA",
+        7 => "CUARTA DIMENSION",
         _ => "SUPERCUANTICO",
     }
 }
@@ -314,7 +359,9 @@ impl Game {
             quantum: false,
             dims: false,
             dim: 0,
-            other: [[Cell::default(); W as usize]; H as usize],
+            others: [[[Cell::default(); W as usize]; H as usize]; 3],
+            nd: 1,
+            sym: false,
         };
         for i in 0..5 {
             let s = g.gen_spec(i < 2);
@@ -360,7 +407,85 @@ impl Game {
             }
             prev = *g;
         }
-        ((self.lines - prev) % 6, 6)
+        ((self.lines - prev) % 7, 7)
+    }
+
+    /// Camino mas corto (mover, bajar, girar con sus patadas) de la pieza activa hasta
+    /// (giro, columna, fila). Es el mismo recorrido que puede hacer un jugador.
+    pub fn path_to(&self, rot: usize, x: i32, y: i32) -> Option<Vec<Mv>> {
+        use std::collections::HashMap;
+        let a0 = self.active?;
+        if a0.dx.is_some() {
+            return None;
+        }
+        let kind = a0.spec.kind;
+        let start = (a0.rot, a0.x, a0.y);
+        let goal = (rot, x, y);
+        let mut seen: HashMap<(usize, i32, i32), Option<((usize, i32, i32), Mv)>> = HashMap::new();
+        let mut q = VecDeque::new();
+        seen.insert(start, None);
+        q.push_back(start);
+        while let Some(n) = q.pop_front() {
+            if n == goal {
+                let mut out = Vec::new();
+                let mut cur = n;
+                while let Some(Some((p, m))) = seen.get(&cur).copied() {
+                    out.push(m);
+                    cur = p;
+                }
+                out.reverse();
+                return Some(out);
+            }
+            let (r, x0, y0) = n;
+            let mut nxt: Vec<((usize, i32, i32), Mv)> = Vec::new();
+            for (d, m) in [(-1, Mv::Left), (1, Mv::Right)] {
+                if self.fits(kind, r, x0 + d, y0) {
+                    nxt.push(((r, x0 + d, y0), m));
+                }
+            }
+            if self.fits(kind, r, x0, y0 + 1) {
+                nxt.push(((r, x0, y0 + 1), Mv::Down));
+            }
+            if kind != 1 {
+                for (cw, m) in [(true, Mv::Cw), (false, Mv::Ccw)] {
+                    let to = if cw { (r + 1) % 4 } else { (r + 3) % 4 };
+                    for &(kx, ky) in pieces::kicks(kind, r, to).iter() {
+                        if self.fits(kind, to, x0 + kx, y0 + ky) {
+                            nxt.push(((to, x0 + kx, y0 + ky), m));
+                            break;
+                        }
+                    }
+                }
+            }
+            for (nn, m) in nxt {
+                if !seen.contains_key(&nn) {
+                    seen.insert(nn, Some((n, m)));
+                    q.push_back(nn);
+                }
+            }
+        }
+        None
+    }
+
+    /// Hace un movimiento con las mismas funciones que usan los botones.
+    pub fn apply_mv(&mut self, m: Mv) {
+        match m {
+            Mv::Left => {
+                self.shift(-1);
+            }
+            Mv::Right => {
+                self.shift(1);
+            }
+            Mv::Down => {
+                self.soft_step();
+            }
+            Mv::Cw => {
+                self.rotate(true);
+            }
+            Mv::Ccw => {
+                self.rotate(false);
+            }
+        }
     }
 
     /// Jev (la IA de demostracion): prueba cada giro y columna con las reglas reales
@@ -407,22 +532,33 @@ impl Game {
         best.map(|b| (b.1, b.2))
     }
 
-    /// Salta a la otra dimension si la pieza cabe alli. Devuelve si pudo.
+    /// Pasa a la siguiente dimension (A, B, C, D y vuelta a A): el pozo visible pasa al
+    /// final de la cola de hologramas y el primer holograma se vuelve el pozo.
+    fn cycle_dim(&mut self) {
+        let n = self.nd - 1;
+        std::mem::swap(&mut self.grid, &mut self.others[0]);
+        self.others[..n].rotate_left(1);
+        self.dim = ((self.dim as usize + 1) % self.nd) as u8;
+    }
+
+    /// Salta a la siguiente dimension si la pieza cabe alli. Devuelve si pudo.
     pub fn switch_dim(&mut self) -> bool {
-        if !self.dims || self.over {
+        if self.nd < 2 || self.over {
             return false;
         }
-        std::mem::swap(&mut self.grid, &mut self.other);
+        self.cycle_dim();
         let ok = match self.active {
             Some(a) => self.active_fits(&a),
             None => true,
         };
         if !ok {
-            std::mem::swap(&mut self.grid, &mut self.other);
+            // Deshacer: dar la vuelta completa menos uno es volver al punto de partida
+            for _ in 1..self.nd {
+                self.cycle_dim();
+            }
             self.events.push(Event::DimBlocked);
             return false;
         }
-        self.dim ^= 1;
         self.lock_t = 0.0;
         self.events.push(Event::DimSwitch);
         true
@@ -430,9 +566,20 @@ impl Game {
 
     /// Al subir de nivel cuantico: abre dimensiones y trae ya la pieza del concepto nuevo.
     fn on_qlevel(&mut self) {
-        if self.level >= 4 && !self.dims {
+        // 4: segunda dimension, 5: tercera, 7: cuarta
+        let want = match self.level {
+            0..=3 => 1,
+            4 => 2,
+            5 | 6 => 3,
+            _ => 4,
+        };
+        if want > self.nd {
+            self.nd = want;
             self.dims = true;
             self.events.push(Event::DimOpen);
+        }
+        if self.level >= 6 {
+            self.sym = true;
         }
         let plain = Spec {
             kind: 0,
@@ -748,17 +895,25 @@ impl Game {
         if !self.active_fits(&a) {
             a.y -= 1;
             // Con dimensiones abiertas, si aqui no cabe la pieza escapa a la otra dimension.
-            if !self.active_fits(&a) && self.dims {
-                std::mem::swap(&mut self.grid, &mut self.other);
-                let b = Active { y: a.y + 1, ..a };
-                if self.active_fits(&b) || self.active_fits(&a) {
+            if !self.active_fits(&a) && self.nd >= 2 {
+                let mut found = false;
+                for _ in 1..self.nd {
+                    self.cycle_dim();
+                    let b = Active { y: a.y + 1, ..a };
                     if self.active_fits(&b) {
                         a = b;
+                        found = true;
+                        break;
                     }
-                    self.dim ^= 1;
+                    if self.active_fits(&a) {
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
                     self.events.push(Event::DimSwitch);
                 } else {
-                    std::mem::swap(&mut self.grid, &mut self.other);
+                    self.cycle_dim();
                 }
             }
             if !self.active_fits(&a) {
@@ -1108,14 +1263,21 @@ impl Game {
     }
 
     fn clear_lines(&mut self) -> usize {
-        // Interferencia: con dimensiones abiertas una fila se completa sumando las dos.
-        let dims = self.dims;
+        // Interferencia: con varias dimensiones una fila se completa sumando todas.
+        // Simetria: una fila simetrica con 6 o mas bloques tambien se borra.
+        let nd = self.nd;
+        let sym = self.sym;
+        let filled = |s: &Game, x: i32, y: i32| -> bool {
+            s.grid[y as usize][x as usize].kind != 0
+                || (0..nd.saturating_sub(1)).any(|k| s.others[k][y as usize][x as usize].kind != 0)
+        };
         let full: Vec<i32> = (0..H)
             .filter(|&y| {
-                (0..W).all(|x| {
-                    self.grid[y as usize][x as usize].kind != 0
-                        || (dims && self.other[y as usize][x as usize].kind != 0)
-                })
+                if (0..W).all(|x| filled(self, x, y)) {
+                    return true;
+                }
+                sym && (0..W).filter(|&x| filled(self, x, y)).count() >= 6
+                    && (0..W / 2).all(|x| filled(self, x, y) == filled(self, W - 1 - x, y))
             })
             .collect();
         let n = full.len();
@@ -1123,17 +1285,26 @@ impl Game {
             self.combo = -1;
             return 0;
         }
+        let sym_rows = full
+            .iter()
+            .filter(|&&y| !(0..W).all(|x| filled(self, x, y)))
+            .count();
+        if sym_rows > 0 {
+            self.events.push(Event::Symmetry(sym_rows));
+        }
         let mut cells = Vec::new();
         let mut groups: Vec<u32> = Vec::new();
         for &y in &full {
             for x in 0..W {
                 let mut c = self.grid[y as usize][x as usize];
-                let o = self.other[y as usize][x as usize];
-                if o.ent != 0 && !groups.contains(&(o.ent / 2)) {
-                    groups.push(o.ent / 2);
-                }
-                if c.kind == 0 {
-                    c = o;
+                for k in 0..nd.saturating_sub(1) {
+                    let o = self.others[k][y as usize][x as usize];
+                    if o.ent != 0 && !groups.contains(&(o.ent / 2)) {
+                        groups.push(o.ent / 2);
+                    }
+                    if c.kind == 0 {
+                        c = o;
+                    }
                 }
                 cells.push((x, y, c.kind));
                 if c.ent != 0 && !groups.contains(&(c.ent / 2)) {
@@ -1154,7 +1325,9 @@ impl Game {
             ng
         };
         self.grid = compact(&self.grid);
-        self.other = compact(&self.other);
+        for k in 0..3 {
+            self.others[k] = compact(&self.others[k]);
+        }
 
         // Accion fantasmal a distancia: los bloques entrelazados desaparecen juntos
         // (tambien los que estan en la otra dimension).
@@ -1167,10 +1340,12 @@ impl Game {
                         ent_cells.push((x, y, c.kind));
                         self.grid[y as usize][x as usize] = Cell::default();
                     }
-                    let o = self.other[y as usize][x as usize];
-                    if o.ent != 0 && groups.contains(&(o.ent / 2)) {
-                        ent_cells.push((x, y, o.kind));
-                        self.other[y as usize][x as usize] = Cell::default();
+                    for k in 0..3 {
+                        let o = self.others[k][y as usize][x as usize];
+                        if o.ent != 0 && groups.contains(&(o.ent / 2)) {
+                            ent_cells.push((x, y, o.kind));
+                            self.others[k][y as usize][x as usize] = Cell::default();
+                        }
                     }
                 }
             }
@@ -1195,7 +1370,7 @@ impl Game {
         }
         pts += 25 * ent_cells.len() as u64 * lvl;
         let empty = self.grid.iter().all(|r| r.iter().all(|c| c.kind == 0))
-            && self.other.iter().all(|r| r.iter().all(|c| c.kind == 0));
+            && self.others.iter().all(|g| g.iter().all(|r| r.iter().all(|c| c.kind == 0)));
         if empty {
             pts += 2000 * lvl;
             self.events.push(Event::Perfect);

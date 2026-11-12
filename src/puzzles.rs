@@ -34,6 +34,8 @@ pub struct Puzzle {
     pub dual: bool,
     /// Piezas que pide la solucion lateral (solo importa si dual).
     pub par: u32,
+    /// Solucion lateral guardada por el generador (la repite Jev): "H;P1,4,19".
+    pub sol: &'static str,
 }
 
 pub const PUZZLES: &[Puzzle] = &[
@@ -52,6 +54,7 @@ pub const PUZZLES: &[Puzzle] = &[
         trick: "TUNEL",
         dual: false,
         par: 1,
+        sol: "",
     },
     Puzzle {
         name: "Muro",
@@ -71,6 +74,7 @@ pub const PUZZLES: &[Puzzle] = &[
         trick: "GIRAR + TUNEL",
         dual: false,
         par: 1,
+        sol: "",
     },
     Puzzle {
         name: "Al reves",
@@ -90,6 +94,7 @@ pub const PUZZLES: &[Puzzle] = &[
         trick: "GUARDAR",
         dual: false,
         par: 2,
+        sol: "",
     },
     Puzzle {
         name: "El observador",
@@ -107,6 +112,7 @@ pub const PUZZLES: &[Puzzle] = &[
         trick: "OBSERVAR",
         dual: false,
         par: 1,
+        sol: "",
     },
     Puzzle {
         name: "A distancia",
@@ -125,6 +131,7 @@ pub const PUZZLES: &[Puzzle] = &[
         trick: "ENTRELAZADO",
         dual: false,
         par: 2,
+        sol: "",
     },
     Puzzle {
         name: "La llave",
@@ -145,6 +152,7 @@ pub const PUZZLES: &[Puzzle] = &[
         trick: "ENTRELAZADO",
         dual: false,
         par: 2,
+        sol: "",
     },
     Puzzle {
         name: "Reaccion en cadena",
@@ -163,6 +171,7 @@ pub const PUZZLES: &[Puzzle] = &[
         trick: "TUNEL + ENTRELAZADO",
         dual: false,
         par: 2,
+        sol: "",
     },
     Puzzle {
         name: "Gran final",
@@ -181,6 +190,7 @@ pub const PUZZLES: &[Puzzle] = &[
         trick: "GUARDAR + TUNEL + ENTRELAZADO",
         dual: false,
         par: 2,
+        sol: "",
     },
 ];
 
