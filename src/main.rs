@@ -30,6 +30,7 @@ const DIMN: [char; 4] = ['A', 'B', 'C', 'D'];
 // Jev real (TypeSafe): la pagina web pregunta por un "puente" (Cloudflare) que guarda la
 // llave. Estas funciones las pone la pagina (web_index.html); en el APK no existen.
 #[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "env")]
 extern "C" {
     fn jev_available() -> i32;
     fn jev_ask(ptr: *const u8, len: usize);
