@@ -27,6 +27,38 @@ const MODES: [Mode; 3] = [Mode::Facil, Mode::Normal, Mode::Experto];
 const DIMC: [Color; 4] = [CYAN, MAGENTA, GOLD, GREEN];
 const DIMN: [char; 4] = ['A', 'B', 'C', 'D'];
 
+// Jev real (TypeSafe): la pagina web pregunta por un "puente" (Cloudflare) que guarda la
+// llave. Estas funciones las pone la pagina (web_index.html); en el APK no existen.
+#[cfg(target_arch = "wasm32")]
+extern "C" {
+    fn jev_available() -> i32;
+    fn jev_ask(ptr: *const u8, len: usize);
+    fn jev_poll() -> i32;
+}
+#[cfg(target_arch = "wasm32")]
+fn jev_net_available() -> bool {
+    unsafe { jev_available() == 1 }
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn jev_net_available() -> bool {
+    false
+}
+#[cfg(target_arch = "wasm32")]
+fn jev_net_ask(s: &str) {
+    unsafe { jev_ask(s.as_ptr(), s.len()) }
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn jev_net_ask(_s: &str) {}
+/// -1 esperando, 0..n numero de la jugada elegida, -2 error o sin respuesta.
+#[cfg(target_arch = "wasm32")]
+fn jev_net_poll() -> i32 {
+    unsafe { jev_poll() }
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn jev_net_poll() -> i32 {
+    -2
+}
+
 fn window_conf() -> Conf {
     Conf {
         window_title: "Cuantris".to_owned(),
@@ -674,6 +706,12 @@ struct App {
     jev_i: usize,
     jev_moves: Option<Vec<game::Mv>>,
     bot_end_t: f32,
+    /// Jev real (TypeSafe) elige la jugada entre las mejores candidatas
+    jev_real: bool,
+    jev_asking: bool,
+    jev_cands: Vec<game::BotCand>,
+    jev_ticks: u32,
+    jev_ok: u32,
     /// Tarjeta de explicacion del entrenamiento lateral al empezar
     intro: bool,
     intro_seen: [bool; 3],
@@ -753,6 +791,11 @@ impl App {
             jev_i: 0,
             jev_moves: None,
             bot_end_t: 0.0,
+            jev_real: false,
+            jev_asking: false,
+            jev_cands: Vec::new(),
+            jev_ticks: 0,
+            jev_ok: 0,
             intro: false,
             intro_seen: [false; 3],
             intro_t: 0.0,
@@ -928,6 +971,44 @@ impl App {
         self.bot_plan = None;
         self.bot_for = u32::MAX;
         self.bot_wait = 0;
+        // Si hay puente configurado, el Jev real elige; si no, juega el Jev local
+        self.jev_real = jev_net_available();
+        self.jev_asking = false;
+        self.jev_ok = 0;
+    }
+
+    /// La pregunta que se le hace al Jev real: elegir entre las mejores jugadas.
+    fn jev_question(&self) -> String {
+        let g = &self.game;
+        let kind = g.active.map(|a| a.spec.kind).unwrap_or(0).min(6);
+        let name = ["I", "O", "T", "S", "Z", "J", "L"][kind];
+        let mut crit = String::new();
+        for (i, c) in self.jev_cands.iter().enumerate() {
+            if i > 0 {
+                crit.push(',');
+            }
+            crit.push_str(&format!(
+                "\"c{}\":\"lines cleared {}, holes {}, max height {}, bumpiness {}{}\"",
+                i,
+                c.lines,
+                c.holes,
+                c.height,
+                c.bump,
+                if c.sw > 0 { ", jumps to another dimension" } else { "" }
+            ));
+        }
+        let mut q = String::new();
+        q.push_str("{\"model\":\"jev-latest\",\"state\":\"Falling-block puzzle game, level ");
+        q.push_str(&g.level.to_string());
+        q.push_str(". Current piece: ");
+        q.push_str(name);
+        q.push_str(". Each candidate placement is described by the board it leaves behind.\",");
+        q.push_str("\"questions\":{\"move\":{\"type\":\"choice\",\"instructions\":");
+        q.push_str("\"Pick the placement that leaves the cleanest board: clear more lines, fewer holes, lower height, smoother surface.\",");
+        q.push_str("\"criteria\":{");
+        q.push_str(&crit);
+        q.push_str("}}}}");
+        q
     }
 
     /// Jev (IA) resuelve los niveles del MUNDO LATERAL desde el 1 y el jugador mira.
@@ -1018,7 +1099,43 @@ impl App {
         }
         let locks = self.game.pieces_used();
         if self.bot_plan.is_none() || self.bot_for != locks {
-            self.bot_plan = self.game.bot_plan();
+            if self.jev_real {
+                // Jev real: se le muestran las mejores jugadas y el elige una
+                if !self.jev_asking {
+                    self.jev_cands = self.game.bot_candidates(8);
+                    if self.jev_cands.is_empty() {
+                        return;
+                    }
+                    let q = self.jev_question();
+                    jev_net_ask(&q);
+                    self.jev_asking = true;
+                    self.jev_ticks = 0;
+                    self.bot_plan = None;
+                    return;
+                }
+                self.jev_ticks += 1;
+                let p = jev_net_poll();
+                let idx = if p >= 0 && (p as usize) < self.jev_cands.len() {
+                    Some(p as usize)
+                } else if p == -2 || self.jev_ticks > 90 {
+                    // Sin respuesta: juega la mejor segun la formula local
+                    Some(0)
+                } else {
+                    None
+                };
+                let idx = match idx {
+                    Some(i) => i,
+                    None => return,
+                };
+                if p >= 0 {
+                    self.jev_ok += 1;
+                }
+                let c = self.jev_cands[idx];
+                self.bot_plan = Some((c.sw, c.rot, c.x));
+                self.jev_asking = false;
+            } else {
+                self.bot_plan = self.game.bot_plan();
+            }
             self.bot_for = locks;
             self.bot_rots = 0;
             self.bot_sw = 0;
@@ -3468,8 +3585,13 @@ impl App {
         if g.over || self.intro {
             return;
         }
+        if self.bot && self.jev_real {
+            let s = format!("JEV REAL (TypeSafe): {} jugadas elegidas por el - tu solo miras", self.jev_ok);
+            self.draw_notice(l, &[(s.as_str(), VIOLET)]);
+            return;
+        }
         let (txt, c) = if self.bot {
-            ("JEV (IA) JUEGA: tu solo miras. PAUSA para salir", VIOLET)
+            ("JEV (IA local) juega: tu solo miras. PAUSA para salir", VIOLET)
         } else if g.level == 6 {
             ("SIMETRIA: una fila simetrica con 6+ bloques se borra", MAGENTA)
         } else if g.dims {

@@ -267,6 +267,48 @@ pub fn parse_sol(s: &str) -> Vec<Op> {
         .collect()
 }
 
+/// Una jugada posible de la pieza activa, con lo que dejaria en el pozo.
+#[derive(Clone, Copy)]
+pub struct BotCand {
+    pub sw: usize,
+    pub rot: usize,
+    pub x: i32,
+    pub score: f32,
+    pub lines: u32,
+    pub holes: u32,
+    pub height: u32,
+    pub bump: u32,
+}
+
+/// (altura total, huecos, irregularidad, altura maxima) del pozo, contando todas las dimensiones.
+fn bot_stats(g: &Game) -> (f32, f32, f32, u32) {
+    let nd1 = g.nd.saturating_sub(1);
+    let filled = |x: i32, y: i32| -> bool {
+        g.grid[y as usize][x as usize].kind != 0 || (0..nd1).any(|k| g.others[k][y as usize][x as usize].kind != 0)
+    };
+    let (mut agg, mut holes, mut bump, mut prev, mut maxh) = (0.0f32, 0.0f32, 0.0f32, -1.0f32, 0u32);
+    for x in 0..W {
+        let (mut h, mut seen) = (0, false);
+        for y in 0..H {
+            if filled(x, y) {
+                if !seen {
+                    h = H - y;
+                    seen = true;
+                }
+            } else if seen {
+                holes += 1.0;
+            }
+        }
+        agg += h as f32;
+        maxh = maxh.max(h as u32);
+        if prev >= 0.0 {
+            bump += (h as f32 - prev).abs();
+        }
+        prev = h as f32;
+    }
+    (agg, holes, bump, maxh)
+}
+
 /// Valor de un pozo para Jev: pocas alturas, pocos huecos, superficie lisa, lineas hechas.
 fn bot_eval(g: &Game, lines_before: u32) -> f32 {
     if g.over {
@@ -507,8 +549,16 @@ impl Game {
     /// Jev (la IA de demostracion): prueba cada giro y columna con las reglas reales
     /// y elige la jugada que deja el pozo mas limpio. Devuelve (giros, columna).
     pub fn bot_plan(&self) -> Option<(usize, usize, i32)> {
-        self.active?;
-        let mut best: Option<(f32, usize, usize, i32)> = None;
+        self.bot_candidates(1).first().map(|c| (c.sw, c.rot, c.x))
+    }
+
+    /// Las `k` mejores jugadas segun la formula de Jev local (de mejor a peor), con los
+    /// datos que se le muestran al Jev real para que elija entre ellas.
+    pub fn bot_candidates(&self, k: usize) -> Vec<BotCand> {
+        let mut all: Vec<BotCand> = Vec::new();
+        if self.active.is_none() {
+            return all;
+        }
         // Tambien prueba cada dimension: antes de colocar la pieza salta `sw` veces
         for sw in 0..self.nd.max(1) {
             let mut gd = self.clone();
@@ -537,30 +587,50 @@ impl Game {
                 for xt in -3..(W + 1) {
                     let mut g = g0.clone();
                     let mut guard = 0;
+                    #[allow(unused_assignments)]
+                    let mut reached = false;
                     loop {
-                        let a = g.active?;
-                        if a.x == xt || guard > 14 {
+                        let ax = match g.active {
+                            Some(a) => a.x,
+                            None => {
+                                reached = false;
+                                break;
+                            }
+                        };
+                        if ax == xt || guard > 14 {
+                            reached = ax == xt;
                             break;
                         }
-                        if !g.shift(if xt > a.x { 1 } else { -1 }) {
+                        if !g.shift(if xt > ax { 1 } else { -1 }) {
+                            reached = false;
                             break;
                         }
                         guard += 1;
                     }
-                    if g.active?.x != xt {
+                    if !reached {
                         continue;
                     }
                     let lines0 = g.lines;
                     g.hard_drop();
                     // Saltar de dimension cuesta un poco: solo si de verdad mejora
-                    let sc = bot_eval(&g, lines0) - 0.05 * sw as f32;
-                    if best.map(|b| sc > b.0).unwrap_or(true) {
-                        best = Some((sc, sw, r, xt));
-                    }
+                    let score = bot_eval(&g, lines0) - 0.05 * sw as f32;
+                    let (_, holes, bump, maxh) = bot_stats(&g);
+                    all.push(BotCand {
+                        sw,
+                        rot: r,
+                        x: xt,
+                        score,
+                        lines: g.lines - lines0,
+                        holes: holes as u32,
+                        height: maxh,
+                        bump: bump as u32,
+                    });
                 }
             }
         }
-        best.map(|b| (b.1, b.2, b.3))
+        all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        all.truncate(k);
+        all
     }
 
     /// Pasa a la siguiente dimension (A, B, C, D y vuelta a A): el pozo visible pasa al
