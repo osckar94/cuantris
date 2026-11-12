@@ -220,6 +220,14 @@ fn menu_rects() -> [Rect; 2] {
     [Rect::new(x, y0, bw, bh), Rect::new(x, y0 + bh + h * 0.075, bw, bh)]
 }
 
+/// Boton JEV (IA) bajo las dos tarjetas del menu.
+fn jev_rect() -> Rect {
+    let h = screen_height();
+    let rs = menu_rects();
+    let last = rs[1];
+    Rect::new(last.x, last.y + last.h + h * 0.028, last.w, h * 0.075)
+}
+
 /// Niveles por pagina en el MUNDO LATERAL (4 columnas x 5 filas).
 const PAGE: usize = 20;
 
@@ -647,6 +655,13 @@ struct App {
     dim_flash: f32,
     /// Mejor nivel cuantico alcanzado en la sesion
     q_best: u32,
+    /// Jev (IA) esta jugando: el jugador solo mira.
+    bot: bool,
+    bot_t: f32,
+    bot_plan: Option<(usize, i32)>,
+    bot_for: u32,
+    bot_rots: usize,
+    bot_wait: u32,
     /// Tarjeta de explicacion del entrenamiento lateral al empezar
     intro: bool,
     intro_seen: [bool; 3],
@@ -715,6 +730,12 @@ impl App {
             page: 0,
             dim_flash: 0.0,
             q_best: 0,
+            bot: false,
+            bot_t: 0.0,
+            bot_plan: None,
+            bot_for: u32::MAX,
+            bot_rots: 0,
+            bot_wait: 0,
             intro: false,
             intro_seen: [false; 3],
             intro_t: 0.0,
@@ -876,8 +897,72 @@ impl App {
         }
     }
 
+    /// Jev (IA) juega el MUNDO CUANTICO y el jugador mira.
+    fn start_jev(&mut self) {
+        self.start_quantum();
+        self.bot = true;
+        self.intro = false;
+        self.bot_plan = None;
+        self.bot_for = u32::MAX;
+        self.bot_wait = 0;
+    }
+
+    /// Un paso de Jev: gira, mueve y suelta la pieza, a ritmo para poder verlo.
+    fn bot_step(&mut self, dt: f32) {
+        if !self.bot || self.game.over {
+            return;
+        }
+        let a = match self.game.active {
+            Some(a) => a,
+            None => return,
+        };
+        self.bot_t += dt;
+        let period = if self.game.level >= 4 { 0.05 } else { 0.09 };
+        if self.bot_t < period {
+            return;
+        }
+        self.bot_t = 0.0;
+        // Pieza doble: observa antes de moverla
+        if a.dx.is_some() && self.game.charges > 0 {
+            self.game.observe();
+            self.bot_plan = None;
+            return;
+        }
+        let locks = self.game.pieces_used();
+        if self.bot_plan.is_none() || self.bot_for != locks {
+            self.bot_plan = self.game.bot_plan();
+            self.bot_for = locks;
+            self.bot_rots = 0;
+            self.bot_wait = 4;
+        }
+        let (r, xt) = match self.bot_plan {
+            Some(p) => p,
+            None => return,
+        };
+        if self.bot_wait > 0 {
+            self.bot_wait -= 1;
+            return;
+        }
+        if self.bot_rots < r {
+            self.game.rotate(true);
+            self.bot_rots += 1;
+            return;
+        }
+        let moved = if a.x < xt {
+            self.game.shift(1)
+        } else if a.x > xt {
+            self.game.shift(-1)
+        } else {
+            false
+        };
+        if !moved {
+            self.game.hard_drop();
+        }
+    }
+
     /// Empieza una partida del MUNDO CUANTICO desde el nivel 1.
     fn start_quantum(&mut self) {
+        self.bot = false;
         self.start(Mode::Facil);
         self.game = Game::new_quantum();
         self.intro = !self.q_intro_seen;
@@ -965,6 +1050,9 @@ impl App {
 
     fn set_state(&mut self, s: State) {
         self.state = s;
+        if s == State::Menu || s == State::Puzzles {
+            self.bot = false;
+        }
         self.pad_held.clear();
         self.gestures.clear();
         self.block_input = true;
@@ -1143,6 +1231,10 @@ impl App {
                 if self.sound_hit(pos, l) {
                     continue;
                 }
+                if jev_rect().contains(pos) {
+                    self.start_jev();
+                    return;
+                }
                 if rs[0].contains(pos) {
                     self.start_quantum();
                     return;
@@ -1155,7 +1247,9 @@ impl App {
                 }
             }
         }
-        if is_key_pressed(KeyCode::Key2) {
+        if is_key_pressed(KeyCode::Key3) {
+            self.start_jev();
+        } else if is_key_pressed(KeyCode::Key2) {
             self.page = self.lat_unlocked() / PAGE;
             self.set_state(State::Puzzles);
         } else if is_key_pressed(KeyCode::Key1) || is_key_pressed(KeyCode::Enter) {
@@ -1170,7 +1264,7 @@ impl App {
             || is_key_pressed(KeyCode::Enter);
         if self.intro {
             self.intro_t += dt;
-            if tap && self.intro_t > 0.4 {
+            if (tap && self.intro_t > 0.4) || (self.bot && self.intro_t > 1.8) {
                 self.intro = false;
                 self.block_input = true;
                 self.sfx.play(S::Click, 0.5);
@@ -1203,7 +1297,7 @@ impl App {
         if let Some((k, t)) = self.explain.as_mut() {
             *t += dt;
             let _ = k;
-            if tap && *t > 0.4 {
+            if (tap && *t > 0.4) || (self.bot && *t > 2.4) {
                 self.explain = None;
                 self.block_input = true;
                 self.sfx.play(S::Click, 0.5);
@@ -1443,6 +1537,7 @@ impl App {
             self.game.shift(dir);
             shifts -= dir;
         }
+        self.bot_step(dt);
         if self.puzzle.is_none() {
             if is_key_pressed(KeyCode::D) || is_key_pressed(KeyCode::Tab) {
                 self.dim_press(l);
@@ -2060,10 +2155,23 @@ impl App {
             draw_text(go, tx + 1.5, r.y + r.h * 0.94 + 1.5, s4, dark);
             draw_text(go, tx, r.y + r.h * 0.94, s4, alpha(WHITE, 0.7 + 0.3 * p));
         }
-        let last = rs[1];
+        // Boton JEV: la IA juega el mundo cuantico y tu la miras
+        let jr = jev_rect();
+        let jp = (t * 2.5).sin() * 0.5 + 0.5;
+        button(jr, "", VIOLET, true, 0.25 + 0.35 * jp);
+        let chip = Rect::new(jr.x + jr.h * 0.18, jr.y + jr.h * 0.2, jr.h * 0.6, jr.h * 0.6);
+        panel(chip, VIOLET);
+        text_c("IA", chip.x + chip.w / 2.0, chip.y + chip.h * 0.68, fit_size("IA", chip.h * 0.55, chip.w * 0.8), WHITE);
+        let jx = chip.x + chip.w + jr.h * 0.2;
+        let jw = jr.x + jr.w - jx - jr.h * 0.15;
+        let j1 = fit_size("JEV", jr.h * 0.38, jw);
+        draw_text("JEV", jx + 1.5, jr.y + jr.h * 0.46 + 1.5, j1, Color::new(0.0, 0.0, 0.0, 0.8));
+        draw_text("JEV", jx, jr.y + jr.h * 0.46, j1, WHITE);
+        let j2 = fit_size("Mira como la IA juega el mundo cuantico", jr.h * 0.2, jw);
+        draw_text("Mira como la IA juega el mundo cuantico", jx, jr.y + jr.h * 0.78, j2, alpha(WHITE, 0.95));
         let foot = "Cada mundo es puro: en uno piensas en cuantico, en el otro de lado";
         let fs = fit_size(foot, (w * 0.04).min(h * 0.022), w * 0.94);
-        text_c(foot, w / 2.0, (last.y + last.h + h * 0.07).min(h * 0.97), fs, alpha(WHITE, 0.7));
+        text_c(foot, w / 2.0, (jr.y + jr.h + h * 0.04).min(h * 0.985), fs, alpha(WHITE, 0.7));
     }
 
     fn draw_game(&self, l: &Lay) {
@@ -3173,7 +3281,9 @@ impl App {
         if g.over || self.intro {
             return;
         }
-        let (txt, c) = if g.dims {
+        let (txt, c) = if self.bot {
+            ("JEV (IA) JUEGA: tu solo miras. PAUSA para salir", VIOLET)
+        } else if g.dims {
             if g.dim == 0 {
                 ("DIMENSION A - el holograma rosa es la dimension B", CYAN)
             } else {

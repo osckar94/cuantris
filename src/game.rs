@@ -225,6 +225,33 @@ pub struct Game {
     pub other: [[Cell; W as usize]; H as usize],
 }
 
+/// Valor de un pozo para Jev: pocas alturas, pocos huecos, superficie lisa, lineas hechas.
+fn bot_eval(g: &Game, lines_before: u32) -> f32 {
+    if g.over {
+        return -1.0e6;
+    }
+    let (mut agg, mut holes, mut bump, mut prev) = (0.0f32, 0.0f32, 0.0f32, -1.0f32);
+    for x in 0..W {
+        let (mut h, mut seen) = (0, false);
+        for y in 0..H {
+            if g.grid[y as usize][x as usize].kind != 0 {
+                if !seen {
+                    h = H - y;
+                    seen = true;
+                }
+            } else if seen {
+                holes += 1.0;
+            }
+        }
+        agg += h as f32;
+        if prev >= 0.0 {
+            bump += (h as f32 - prev).abs();
+        }
+        prev = h as f32;
+    }
+    -0.51 * agg + 0.76 * (g.lines - lines_before) as f32 - 0.36 * holes - 0.18 * bump
+}
+
 /// Lineas totales necesarias para llegar a cada nivel cuantico (2, 3, 4, 5).
 const Q_GOALS: [u32; 4] = [3, 7, 11, 16];
 
@@ -334,6 +361,50 @@ impl Game {
             prev = *g;
         }
         ((self.lines - prev) % 6, 6)
+    }
+
+    /// Jev (la IA de demostracion): prueba cada giro y columna con las reglas reales
+    /// y elige la jugada que deja el pozo mas limpio. Devuelve (giros, columna).
+    pub fn bot_plan(&self) -> Option<(usize, i32)> {
+        self.active?;
+        let mut best: Option<(f32, usize, i32)> = None;
+        for r in 0..4usize {
+            let mut g0 = self.clone();
+            let mut ok = true;
+            for _ in 0..r {
+                if !g0.rotate(true) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            for xt in -3..(W + 1) {
+                let mut g = g0.clone();
+                let mut guard = 0;
+                loop {
+                    let a = g.active?;
+                    if a.x == xt || guard > 14 {
+                        break;
+                    }
+                    if !g.shift(if xt > a.x { 1 } else { -1 }) {
+                        break;
+                    }
+                    guard += 1;
+                }
+                if g.active?.x != xt {
+                    continue;
+                }
+                let lines0 = g.lines;
+                g.hard_drop();
+                let sc = bot_eval(&g, lines0);
+                if best.map(|b| sc > b.0).unwrap_or(true) {
+                    best = Some((sc, r, xt));
+                }
+            }
+        }
+        best.map(|b| (b.1, b.2))
     }
 
     /// Salta a la otra dimension si la pieza cabe alli. Devuelve si pudo.
