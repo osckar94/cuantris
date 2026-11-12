@@ -19,6 +19,49 @@
 <body>
 <canvas id="glcanvas" tabindex="1"></canvas>
 <script src="mq_js_bundle.js"></script>
+<script>
+// Jev real (TypeSafe): el juego le pregunta por un "puente" (Cloudflare Worker) que guarda
+// la llave. Aqui NO hay ninguna llave: solo la direccion del puente, que se guarda en este
+// navegador la primera vez que se pulsa JEV.
+var jev = { estado: -1 };
+function jevUrl() {
+  try {
+    var u = localStorage.getItem('jev_url');
+    if (!u) {
+      u = prompt('Pega la direccion de tu puente Jev (la de Cloudflare). Cancela para usar el Jev local.');
+      if (u && u.trim().indexOf('https://') === 0) { localStorage.setItem('jev_url', u.trim()); }
+      else { u = null; }
+    }
+    return u ? u.trim() : null;
+  } catch (e) { return null; }
+}
+miniquad_add_plugin({
+  name: 'jev',
+  version: 1,
+  register_plugin: function (importObject) {
+    importObject.env.jev_available = function () { return jevUrl() ? 1 : 0; };
+    importObject.env.jev_poll = function () { return jev.estado; };
+    importObject.env.jev_ask = function (ptr, len) {
+      jev.estado = -1;
+      var url = jevUrl();
+      if (!url) { jev.estado = -2; return; }
+      var texto = new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, ptr, len).slice());
+      var ctrl = new AbortController();
+      var tm = setTimeout(function () { ctrl.abort(); }, 4000);
+      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: texto, signal: ctrl.signal })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          clearTimeout(tm);
+          var a = j && j.answers && j.answers.move;
+          var n = a && a.choice ? parseInt(String(a.choice).replace('c', ''), 10) : NaN;
+          jev.estado = isNaN(n) ? -2 : n;
+        })
+        .catch(function () { clearTimeout(tm); jev.estado = -2; });
+    };
+  },
+  on_init: function () {}
+});
+</script>
 <script>load("cuantris.wasm");</script>
 </body>
 </html>
