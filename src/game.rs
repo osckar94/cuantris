@@ -272,11 +272,27 @@ fn bot_eval(g: &Game, lines_before: u32) -> f32 {
     if g.over {
         return -1.0e6;
     }
+    // Con varias dimensiones cuenta el relleno de todas juntas
+    let nd1 = g.nd.saturating_sub(1);
+    let filled = |x: i32, y: i32| -> bool {
+        g.grid[y as usize][x as usize].kind != 0 || (0..nd1).any(|k| g.others[k][y as usize][x as usize].kind != 0)
+    };
+    // Simetria: castiga las filas casi simetricas que aun no lo son (para que las complete)
+    let mut sym_pen = 0.0f32;
+    if g.sym {
+        for y in 0..H {
+            let cnt = (0..W).filter(|&x| filled(x, y)).count();
+            if cnt >= 3 && cnt < W as usize {
+                let mism = (0..W / 2).filter(|&x| filled(x, y) != filled(W - 1 - x, y)).count();
+                sym_pen += 0.07 * mism as f32 * (cnt as f32 / 6.0).min(1.0);
+            }
+        }
+    }
     let (mut agg, mut holes, mut bump, mut prev) = (0.0f32, 0.0f32, 0.0f32, -1.0f32);
     for x in 0..W {
         let (mut h, mut seen) = (0, false);
         for y in 0..H {
-            if g.grid[y as usize][x as usize].kind != 0 {
+            if filled(x, y) {
                 if !seen {
                     h = H - y;
                     seen = true;
@@ -291,7 +307,7 @@ fn bot_eval(g: &Game, lines_before: u32) -> f32 {
         }
         prev = h as f32;
     }
-    -0.51 * agg + 0.76 * (g.lines - lines_before) as f32 - 0.36 * holes - 0.18 * bump
+    -0.51 * agg + 0.76 * (g.lines - lines_before) as f32 - 0.36 * holes - 0.18 * bump - sym_pen
 }
 
 /// Lineas totales necesarias para llegar a cada nivel cuantico (2 a 7).
@@ -490,46 +506,61 @@ impl Game {
 
     /// Jev (la IA de demostracion): prueba cada giro y columna con las reglas reales
     /// y elige la jugada que deja el pozo mas limpio. Devuelve (giros, columna).
-    pub fn bot_plan(&self) -> Option<(usize, i32)> {
+    pub fn bot_plan(&self) -> Option<(usize, usize, i32)> {
         self.active?;
-        let mut best: Option<(f32, usize, i32)> = None;
-        for r in 0..4usize {
-            let mut g0 = self.clone();
-            let mut ok = true;
-            for _ in 0..r {
-                if !g0.rotate(true) {
-                    ok = false;
+        let mut best: Option<(f32, usize, usize, i32)> = None;
+        // Tambien prueba cada dimension: antes de colocar la pieza salta `sw` veces
+        for sw in 0..self.nd.max(1) {
+            let mut gd = self.clone();
+            let mut ok_sw = true;
+            for _ in 0..sw {
+                if !gd.switch_dim() {
+                    ok_sw = false;
                     break;
                 }
             }
-            if !ok {
-                continue;
+            if !ok_sw {
+                break;
             }
-            for xt in -3..(W + 1) {
-                let mut g = g0.clone();
-                let mut guard = 0;
-                loop {
-                    let a = g.active?;
-                    if a.x == xt || guard > 14 {
+            for r in 0..4usize {
+                let mut g0 = gd.clone();
+                let mut ok = true;
+                for _ in 0..r {
+                    if !g0.rotate(true) {
+                        ok = false;
                         break;
                     }
-                    if !g.shift(if xt > a.x { 1 } else { -1 }) {
-                        break;
-                    }
-                    guard += 1;
                 }
-                if g.active?.x != xt {
+                if !ok {
                     continue;
                 }
-                let lines0 = g.lines;
-                g.hard_drop();
-                let sc = bot_eval(&g, lines0);
-                if best.map(|b| sc > b.0).unwrap_or(true) {
-                    best = Some((sc, r, xt));
+                for xt in -3..(W + 1) {
+                    let mut g = g0.clone();
+                    let mut guard = 0;
+                    loop {
+                        let a = g.active?;
+                        if a.x == xt || guard > 14 {
+                            break;
+                        }
+                        if !g.shift(if xt > a.x { 1 } else { -1 }) {
+                            break;
+                        }
+                        guard += 1;
+                    }
+                    if g.active?.x != xt {
+                        continue;
+                    }
+                    let lines0 = g.lines;
+                    g.hard_drop();
+                    // Saltar de dimension cuesta un poco: solo si de verdad mejora
+                    let sc = bot_eval(&g, lines0) - 0.05 * sw as f32;
+                    if best.map(|b| sc > b.0).unwrap_or(true) {
+                        best = Some((sc, sw, r, xt));
+                    }
                 }
             }
         }
-        best.map(|b| (b.1, b.2))
+        best.map(|b| (b.1, b.2, b.3))
     }
 
     /// Pasa a la siguiente dimension (A, B, C, D y vuelta a A): el pozo visible pasa al

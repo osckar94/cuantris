@@ -664,7 +664,8 @@ struct App {
     /// Jev (IA) esta jugando: el jugador solo mira.
     bot: bool,
     bot_t: f32,
-    bot_plan: Option<(usize, i32)>,
+    bot_plan: Option<(usize, usize, i32)>,
+    bot_sw: usize,
     bot_for: u32,
     bot_rots: usize,
     bot_wait: u32,
@@ -744,6 +745,7 @@ impl App {
             bot: false,
             bot_t: 0.0,
             bot_plan: None,
+            bot_sw: 0,
             bot_for: u32::MAX,
             bot_rots: 0,
             bot_wait: 0,
@@ -1019,14 +1021,21 @@ impl App {
             self.bot_plan = self.game.bot_plan();
             self.bot_for = locks;
             self.bot_rots = 0;
+            self.bot_sw = 0;
             self.bot_wait = 4;
         }
-        let (r, xt) = match self.bot_plan {
+        let (sw, r, xt) = match self.bot_plan {
             Some(p) => p,
             None => return,
         };
         if self.bot_wait > 0 {
             self.bot_wait -= 1;
+            return;
+        }
+        // Primero salta a la dimension elegida (A, B, C o D)
+        if self.bot_sw < sw {
+            self.game.switch_dim();
+            self.bot_sw += 1;
             return;
         }
         if self.bot_rots < r {
