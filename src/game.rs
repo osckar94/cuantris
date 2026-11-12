@@ -1188,7 +1188,9 @@ impl Game {
             }
         }
         if let Some(a) = self.active {
-            if a.dx.is_none() && self.grounded(&a) {
+            // En los niveles laterales no hay reloj: la pieza se queda donde la dejes
+            // y solo se fija al pulsar CAIDA (asi se puede deslizar con calma).
+            if a.dx.is_none() && !self.puzzle && self.grounded(&a) {
                 self.lock_t += dt;
                 if self.lock_t >= LOCK_DELAY {
                     self.lock();

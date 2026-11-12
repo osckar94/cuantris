@@ -2813,7 +2813,7 @@ impl App {
         // (numero de regla o 0 para sub-linea, texto, color)
         let rules: Vec<(u32, &str, Color)> = if lateral {
             vec![
-                (1, "SIN RELOJ: nada cae solo. Piensa con calma.", WHITE),
+                (1, "SIN RELOJ: nada cae ni se fija solo. CAIDA fija.", WHITE),
                 (2, "PIEZAS CONTADAS: solo las del panel PIEZAS.", WHITE),
                 (3, "META: esta escrita arriba del tablero.", WHITE),
                 (4, "LO OBVIO NO BASTA. Tus herramientas:", GOLD),
@@ -3534,7 +3534,7 @@ impl App {
         let r = ll.rules;
         panel(r, GOLD);
         let rules = [
-            ("1", "SIN RELOJ: nada cae solo, piensa con calma"),
+            ("1", "SIN RELOJ: nada cae ni se fija; la fijas con CAIDA"),
             ("2", "PIEZAS CONTADAS y una META sobre el tablero"),
             ("3", "LO OBVIO NO BASTA: guarda, gira o entra de lado"),
             ("4", "MENOS PIEZAS = 3 ESTRELLAS"),
